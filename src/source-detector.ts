@@ -20,6 +20,7 @@
  */
 
 import { basename } from 'node:path';
+import { assertCredentialFreeSourceUrl } from './source-url.js';
 import type {
   InstallPattern,
   McpSource,
@@ -217,6 +218,7 @@ function addSourcedServer(
   source: RecipeMcpServerGitSource,
   ref: SourceRef,
 ): void {
+  assertCredentialFreeSourceUrl(source.url, `${ref.recipePath} :: mcpServers.${ref.mcpServerName}.source.url`);
   const refStr = source.ref ?? 'main';
   const key = `${normalizeUrlForKey(source.url)}@${refStr}`;
   const install = mapInstall(source.install);

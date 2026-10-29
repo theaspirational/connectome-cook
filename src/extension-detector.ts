@@ -30,6 +30,7 @@
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { assertCredentialFreeSourceUrl } from './source-url.js';
 import type {
   InstallPattern,
   LocalExtension,
@@ -176,6 +177,7 @@ function addGitExtension(
   errors: string[],
 ): void {
   const source = ext.source!;
+  assertCredentialFreeSourceUrl(source.url, `${ref.recipePath} :: extensions.${name}.source.url`);
   if (isAbsolute(ext.path)) {
     errors.push(
       `${ref.recipePath} :: extensions.${name}: with a 'source' block, 'path' must be ` +

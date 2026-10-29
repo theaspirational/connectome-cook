@@ -6,13 +6,13 @@
  * recorded in connectome.lock. Resolution uses `git ls-remote` — network
  * access at cook time, none at build time beyond the clones themselves.
  *
- * Failure policy: warn-and-continue per source. A ref that can't be
- * resolved (offline, auth, typo'd branch) keeps its symbolic form — the
- * build behaves exactly as without --pin-refs for that source, and the
- * warning names it.
+ * Failure policy: fail closed. An unresolved requested pin aborts before
+ * any backend materializes the plan.
  */
 
 import { execFileSync } from 'node:child_process';
+import { gitEnvironment } from './process-env.js';
+import { assertCredentialFreeSourceUrl } from './source-url.js';
 import { log } from './log.js';
 import type { McpSource } from './types.js';
 
@@ -32,12 +32,14 @@ export function candidateRefNames(ref: string): string[] {
  * Returns null when the remote is unreachable or the ref doesn't exist.
  */
 export function resolveRemoteRef(url: string, ref: string): string | null {
+  assertCredentialFreeSourceUrl(url);
   if (looksLikeSha(ref)) return ref;
   for (const candidate of candidateRefNames(ref)) {
     let output: string;
     try {
       output = execFileSync('git', ['ls-remote', url, candidate], {
         encoding: 'utf-8',
+        env: gitEnvironment(),
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 30_000,
       });
@@ -52,29 +54,27 @@ export function resolveRemoteRef(url: string, ref: string): string | null {
 
 /**
  * Pin every git source in place (sets `source.commit`). Skips registry,
- * sibling-copy, and already-pinned entries. Private sources (authSecret)
- * are skipped with a note — ls-remote would need the credential and cook
- * shouldn't spray tokens at pin time; their clone step still authenticates
- * normally at build time.
+ * sibling-copy, and already-pinned entries. Private symbolic refs are
+ * refused: pinning has no safe authSecret handoff.
  */
 export function pinSources(sources: McpSource[]): void {
   for (const source of sources) {
+    assertCredentialFreeSourceUrl(source.url);
     if (!source.url || source.commit) continue;
     if (source.install.kind === 'npm-global' || source.install.kind === 'sibling-copy') continue;
-    if (source.authSecret) {
-      log.warn(`--pin-refs: ${source.key}: private source (authSecret) — left unpinned`);
-      continue;
-    }
     if (looksLikeSha(source.ref)) {
       source.commit = source.ref;
       continue;
+    }
+    if (source.authSecret) {
+      throw new Error('--pin-refs: cannot resolve private refs with authSecret; supply a commit SHA.');
     }
     const sha = resolveRemoteRef(source.url, source.ref);
     if (sha) {
       source.commit = sha;
       log.info(`--pin-refs: ${log.dim(source.url)}@${source.ref} → ${sha.slice(0, 12)}`);
     } else {
-      log.warn(`--pin-refs: could not resolve ${source.url}@${source.ref} — left unpinned`);
+      throw new Error(`--pin-refs: could not resolve ${source.url}@${source.ref}; no output written.`);
     }
   }
 }

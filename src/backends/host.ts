@@ -36,6 +36,8 @@ import { execFileSync, execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import promptsLib from 'prompts';
+import { gitEnvironment, processAllowlistEnv } from '../process-env.js';
+import { assertCredentialFreeSourceUrl } from '../source-url.js';
 import { log } from '../log.js';
 import type { GeneratorInput, McpSource } from '../types.js';
 import type { Recipe } from '../vendor/recipe.js';
@@ -254,39 +256,28 @@ export function isSatisfiedByLock(
     && (action.commit === undefined || entry.commit === action.commit);
 }
 
-/** Clone URL with an optional token (resolved values > environment; never
- *  logged). The credentialed form is briefly visible in the process list
- *  during the clone; executeClone scrubs it from .git/config afterwards. */
-function cloneUrlFor(action: CloneAction, values: Record<string, string>): string {
-  if (!action.authSecret) return action.url;
-  const token = values[action.authSecret] ?? process.env[action.authSecret];
-  if (!token) {
-    throw new Error(
-      `clone of ${action.url} needs a value for ${action.authSecret} ` +
-      `(supply via prompt, --env-file, or the environment)`,
-    );
+/** Build tools get only allowlisted process/network settings and declared
+ * host requirements, not the runtime value bag or arbitrary parent variables. */
+function buildEnvironment(plan: InstallPlan): NodeJS.ProcessEnv {
+  const env = processAllowlistEnv();
+  for (const requirement of plan.requirements) {
+    if (requirement.value !== undefined) env[requirement.envName] = requirement.value;
   }
-  return action.url.replace(/^https?:\/\//, (m) => `${m}oauth2:${token}@`);
+  return env;
 }
 
 /** Execute one clone+build action. Throws on failure; the caller removes
  *  the target on failure so no half-built checkout survives. */
-function executeClone(action: CloneAction, values: Record<string, string>): { commit?: string } {
+function executeClone(action: CloneAction, buildEnv: NodeJS.ProcessEnv): { commit?: string } {
   rmSync(action.target, { recursive: true, force: true });
   mkdirSync(resolve(action.target, '..'), { recursive: true });
 
+  const gitEnv = gitEnvironment(buildEnv);
   const sslArgs = action.sslBypass ? ['-c', 'http.sslVerify=false'] : [];
   log.step(`cloning ${log.dim(action.url)}${action.ref !== 'main' ? `@${action.ref}` : ''} → ${log.dim(action.target)}`);
-  execFileSync('git', [...sslArgs, 'clone', cloneUrlFor(action, values), action.target], {
-    stdio: ['ignore', 'inherit', 'inherit'],
+  execFileSync('git', [...sslArgs, 'clone', action.url, action.target], {
+    stdio: ['ignore', 'inherit', 'inherit'], env: gitEnv,
   });
-  if (action.authSecret) {
-    // Scrub the token from .git/config — the credentialed URL must not
-    // persist on disk (backups, shared machines, later `git fetch`).
-    execFileSync('git', ['remote', 'set-url', 'origin', action.url], {
-      cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'],
-    });
-  }
   if (action.commit) {
     // Pinned build: check out the exact SHA the operator resolved at cook
     // time, regardless of where the branch tip has moved since. A refspec
@@ -294,29 +285,29 @@ function executeClone(action: CloneAction, values: Record<string, string>): { co
     // clone — fetch the ref first so the SHA exists in the object store.
     if (action.ref.startsWith('refs/')) {
       execFileSync('git', ['fetch', 'origin', action.ref], {
-        cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'],
+        cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'], env: gitEnv,
       });
     }
     execFileSync('git', ['checkout', action.commit], {
-      cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'],
+      cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'], env: gitEnv,
     });
   } else if (action.ref && action.ref !== 'main') {
     if (action.ref.startsWith('refs/')) {
       execFileSync('git', ['fetch', 'origin', `${action.ref}:cook-install-checkout`], {
-        cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'],
+        cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'], env: gitEnv,
       });
       execFileSync('git', ['checkout', 'cook-install-checkout'], {
-        cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'],
+        cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'], env: gitEnv,
       });
     } else {
       execFileSync('git', ['checkout', action.ref], {
-        cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'],
+        cwd: action.target, stdio: ['ignore', 'inherit', 'inherit'], env: gitEnv,
       });
     }
   }
   let commit: string | undefined;
   try {
-    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: action.target })
+    commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: action.target, env: gitEnv })
       .toString().trim();
   } catch {
     // Non-fatal — lock entry just omits the commit.
@@ -327,7 +318,7 @@ function executeClone(action: CloneAction, values: Record<string, string>): { co
     execSync(action.buildCommand, {
       cwd: action.target,
       stdio: ['ignore', 'inherit', 'inherit'],
-      env: process.env,
+      env: buildEnv,
     });
   }
   return { ...(commit !== undefined ? { commit } : {}) };
@@ -451,6 +442,18 @@ export async function runHostBackend(
   options: HostBackendOptions,
 ): Promise<BuildResult> {
   const installDir = options.installDir;
+  // Preflight every source before previewing URLs or making any changes.
+  assertCredentialFreeSourceUrl(options.chRepoUrl, '--ch-repo');
+  for (const source of plan.sources) {
+    assertCredentialFreeSourceUrl(source.url);
+    if (source.authSecret) {
+      throw new Error(
+        'Host installs do not support authSecret: no safe credential handoff is available. ' +
+        'Use a credential-free URL with externally configured Git authentication.',
+      );
+    }
+  }
+  const buildEnv = buildEnvironment(plan);
   const parent = plan.parentWalk.recipe;
   const hasSidecars = (parent.services ?? []).length > 0;
 
@@ -510,7 +513,7 @@ export async function runHostBackend(
         : existingLock!.components.find((c) => c.key === action.key)?.commit;
     } else {
       try {
-        commit = executeClone(action, plan.values).commit;
+        commit = executeClone(action, buildEnv).commit;
       } catch (err) {
         log.error(
           `install of ${action.key} failed: ${err instanceof Error ? err.message : String(err)}`,

@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { assertCredentialFreeSourceUrl } from './source-url.js';
 import { log } from './log.js';
 import { slugify } from './slug.js';
 import type { SubcommandHandler } from './types.js';
@@ -130,7 +131,7 @@ async function runBuildPipeline(argv: string[]): Promise<BuildResult> {
       pinnedChRef = chSha;
       log.info(`--pin-refs: connectome-host@${DEFAULT_CH_REF} → ${chSha.slice(0, 12)}`);
     } else {
-      log.warn(`--pin-refs: could not resolve connectome-host@${DEFAULT_CH_REF} — CH_REF left symbolic`);
+      throw new Error(`--pin-refs: could not resolve connectome-host@${DEFAULT_CH_REF}; no output written.`);
     }
   }
 
@@ -205,6 +206,7 @@ async function handleInstall(argv: string[]): Promise<number> {
 
   const chRepoUrl = flags['ch-repo'] ?? DEFAULT_CH_REPO_URL;
   const chRef = flags['ch-ref'] ?? DEFAULT_CH_REF;
+  assertCredentialFreeSourceUrl(chRepoUrl, '--ch-repo');
 
   // --pin-refs: resolve every symbolic ref (components + connectome-host)
   // to a SHA before executing; clones check out the exact commits.
@@ -217,7 +219,7 @@ async function handleInstall(argv: string[]): Promise<number> {
       chCommit = chSha;
       log.info(`--pin-refs: connectome-host@${chRef} → ${chSha.slice(0, 12)}`);
     } else {
-      log.warn(`--pin-refs: could not resolve connectome-host@${chRef} — left unpinned`);
+      throw new Error(`--pin-refs: could not resolve connectome-host@${chRef}; no output written.`);
     }
   }
 
