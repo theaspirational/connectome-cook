@@ -105,12 +105,12 @@ async function runBuildPipeline(argv: string[]): Promise<BuildResult> {
     alias: { h: 'help' },
   });
 
-  if (flags.out) guard(resolve(flags.out));
-
   if (flags.help) {
     process.stdout.write(BUILD_USAGE);
     return { exitCode: 0, outDir: '' };
   }
+
+  if (flags.out) guard(resolve(flags.out));
 
   const [recipePath] = flags._ as string[];
   if (!recipePath) {
@@ -194,12 +194,12 @@ async function handleInstall(argv: string[]): Promise<number> {
     alias: { h: 'help' },
   });
 
-  if (flags.out) guard(resolve(flags.out));
-
   if (flags.help) {
     process.stdout.write(INSTALL_USAGE + CANDIDATE_HELP);
     return 0;
   }
+
+  if (flags.out) guard(resolve(flags.out));
 
   const [recipePath] = flags._ as string[];
   if (!recipePath) {
@@ -213,6 +213,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   // before resolving anything else. Pass it onward to avoid a second fetch.
   let parentRecipe: Recipe | undefined;
   if (!flags.out) {
+    log.step(`walking recipe ${log.dim(recipePath)}`);
     try { parentRecipe = await loadRecipeRaw(recipePath); }
     catch (err) {
       log.error(`failed to load recipe: ${err instanceof Error ? err.message : String(err)}`);

@@ -12,9 +12,9 @@ function write(name: string, value: unknown) {
   const path = join(dir, name); mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, JSON.stringify(value)); return path;
 }
-function cli(command: string, parent: string, args: string[] = []) {
+function cli(command: string, parent: string, args: string[] = [], explicitOut = true) {
   return spawnSync(process.execPath, [resolve(import.meta.dir, '../bin/cook'), command, parent,
-    '--out', join(dir, 'out'), '--no-prompts', '--yes', ...args], {
+    ...(explicitOut ? ['--out', join(dir, 'out')] : []), '--no-prompts', '--yes', ...args], {
     cwd: dir, env: { PATH: process.env.PATH, HOME: dir }, input: '', encoding: 'utf8', timeout: 15000,
   });
 }
@@ -53,3 +53,23 @@ for (const command of ['install', 'build', 'run']) {
     expect(r.stdout).toContain('OK detected 2 sources (incl. 1 extension), 1 env var\n');
   });
 }
+
+for (const kind of ['missing-agent', 'missing-name', 'malformed', 'missing-file']) test(`failing parent ${kind} preserves legacy bytes on explicit and default install routes`, () => {
+  const parent = join(dir, `${kind}.json`);
+  let error: string;
+  if (kind === 'missing-agent') {
+    write(kind + '.json', { name: 'Invalid' }); error = 'Recipe must have an "agent" object';
+  } else if (kind === 'missing-name') {
+    write(kind + '.json', { agent: { systemPrompt: 'Invalid' } }); error = 'Recipe must have a "name" string';
+  } else if (kind === 'malformed') {
+    writeFileSync(parent, '{');
+    try { JSON.parse('{'); throw Error('fixture unexpectedly parsed'); }
+    catch (e) { error = (e as Error).message; }
+  } else error = `Recipe file not found: ${parent}`;
+  for (const explicitOut of [true, false]) {
+    const r = cli('install', parent, [], explicitOut);
+    expect(r.status).toBe(2);
+    expect(r.stdout).toBe(`-> walking recipe ${parent}\n`);
+    expect(r.stderr).toBe(`ERR failed to load recipe: ${error}\n`);
+  }
+});

@@ -109,7 +109,8 @@ export async function resolvePlan(
 ): Promise<PlanResult> {
   let walks: WalkResult[];
   try {
-    log.step(`walking recipe ${log.dim(recipePath)}`);
+    // A preloaded parent was already announced before the install pre-read.
+    if (!parentRecipe) log.step(`walking recipe ${log.dim(recipePath)}`);
     walks = await walkRecipe(recipePath, parentRecipe);
     log.success(`loaded ${walks.length} recipe${walks.length === 1 ? '' : 's'}`);
   } catch (err) {
