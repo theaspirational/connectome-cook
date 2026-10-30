@@ -1,5 +1,5 @@
 import { createServer } from 'node:net';
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { chmodSync, closeSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -7,9 +7,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { canonical, hash, parseJSON, report, issue, validate, type Records, type Declaration, type Result, type Intent } from './candidate/schema.js';
 import { admitFilesystem, exists, flock, fresh, guard, operationLock, preflight, publish, readRecord, reserve, type PublishPoint } from './candidate/io.js';
 import { bindings, complete, markerFor, syntheticIngest, type QualifiedAdapter } from './candidate/seed.js';
-import { parseEnv } from './candidate/declaration.js';
+import { declarationPlan, parseEnv } from './candidate/declaration.js';
 import { verify, safeGitHead } from './candidate/verify.js';
-import { renderLauncher } from './backends/host.js';
+import { renderLauncher, runHostBackend } from './backends/host.js';
 import { readLockfile } from './lockfile.js';
 
 let dir: string;
@@ -138,7 +138,7 @@ for (const kind of ['zero', 'wal', 'dotfile', 'directory', 'symlink', 'malformed
   else if (kind === 'intent') publish(join(root, '.cook/ingest.intent.json'), 'broken');
   else if (kind === 'unreadable') chmodSync(data, 0o000);
   else writeFileSync(join(data, kind === 'malformed-marker' ? 'seed.consumed' : kind === 'dotfile' ? '.state' : kind === 'wal' ? 'store-wal' : 'store'), kind === 'malformed-marker' ? 'partial{' : '');
-  const a = adapter(); await expect(syntheticIngest(root, seedInput, a)).rejects.toThrow(); expect(a.ingests).toBe(0); if (kind === 'unreadable') chmodSync(data, 0o700);
+  const a = adapter(); await expect(syntheticIngest(root, seedInput, a)).rejects.toThrow(kind === 'intent' ? 'E_INGEST_PENDING' : undefined); expect(a.ingests).toBe(0); if (kind === 'unreadable') chmodSync(data, 0o700);
 });
 test('absent and empty data eligible, without metadata falsely proving adoption', () => {
   fresh(dir); mkdirSync(join(dir, 'data'), { mode: 0o700 }); fresh(dir);
@@ -422,4 +422,101 @@ test('socket entry is history-or-uncertainty and never invokes ingest', async ()
 test('tool success without a qualified result is not a seed receipt', async () => {
   const root = fixture(), a = adapter(); a.ingest = async () => undefined as unknown as Result;
   await expect(syntheticIngest(root, seedInput, a)).rejects.toThrow('E_SCHEMA'); expect(exists(join(root, '.cook/ingest.intent.json'))).toBe(true); expect(exists(join(root, 'data/seed.consumed'))).toBe(false);
+});
+
+
+test('seed check refuses pending intent with exit 4 and E_INGEST_PENDING', () => {
+  const root = fixture(); publish(join(root, '.cook/ingest.intent.json'), 'interrupted');
+  const before = tree(root), r = cli(['seed', 'check', root, '--json']);
+  expect(r.status).toBe(4);
+  expect(JSON.parse(r.stdout).findings.map((f: { code: string }) => f.code)).toContain('E_INGEST_PENDING');
+  expect(tree(root)).toEqual(before);
+});
+test('candidate template value bag excludes ambient sentinel without env-file', () => {
+  const f = prepareFixture(), sentinel = 'TEMPLATE_AMBIENT_MUST_NOT_LEAK';
+  writeFileSync(f.recipe, canonical({ ...declaration.recipes['recipe.json'], containerTemplateFiles: [
+    { hostPath: 'cfg.conf', inContainer: '/etc/cfg.conf', template: 'KEY=${AMBIENT_SECRET}' },
+  ] }));
+  const r = cli([...f.args, '--allow-incomplete-templates'], { ...f.env, AMBIENT_SECRET: sentinel });
+  expect(r.status).toBe(0);
+  expect(readFileSync(join(f.root, 'etc/cfg.conf'), 'utf8')).toBe('KEY=');
+  expect(r.stdout + r.stderr).not.toContain(sentinel);
+});
+test('candidate sidecar secret excludes ambient sentinel without env-file', () => {
+  const f = prepareFixture(), sentinel = 'SIDECAR_AMBIENT_MUST_NOT_LEAK';
+  writeFileSync(f.recipe, canonical({ ...declaration.recipes['recipe.json'], services: [
+    { name: 'fixture', image: 'example.invalid/fixture:synthetic', secrets: ['SIDECAR_SECRET'] },
+  ] }));
+  const r = cli(f.args, { ...f.env, SIDECAR_SECRET: sentinel });
+  expect(r.status).toBe(0); expect(exists(join(f.root, 'SIDECAR_SECRET'))).toBe(false);
+  expect(r.stdout + r.stderr).not.toContain(sentinel);
+});
+test('direct legacy host backend refuses candidate before inspecting sources', async () => {
+  const root = fixture(), before = tree(root), plan = declarationPlan(declaration, root);
+  let sourceReads = 0;
+  Object.defineProperty(plan, 'sources', { get() { sourceReads++; throw Error('unexpected source inspection'); } });
+  await expect(runHostBackend(plan, { candidate: false, installDir: root, noPrompts: true, yes: true,
+    chRepoUrl: declaration.host.url, chRef: 'main', allowIncompleteTemplates: false,
+  })).rejects.toThrow('E_HELD');
+  expect(sourceReads).toBe(0); expect(tree(root)).toEqual(before);
+});
+test('completion caps oversized revalidation timeout at 30 seconds', async () => {
+  const root = fixture(), a = adapter();
+  await expect(syntheticIngest(root, seedInput, a, () => { throw Error('after result'); })).rejects.toThrow();
+  const before = tree(root), delays: number[] = [], realTimer = globalThis.setTimeout;
+  // Observe the production timer's requested delay, but fire immediately.
+  const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay: number) => {
+    delays.push(delay); return realTimer(callback, 0);
+  }) as typeof setTimeout);
+  try {
+    const slow: QualifiedAdapter = { id: a.id, async revalidate() {
+      expect(() => operationLock(root)).toThrow('E_BUSY'); return new Promise<boolean>(() => {});
+    } };
+    await expect(complete(root, new Map([[slow.id, slow]]), 60_000)).rejects.toThrow('E_INGEST_INCOMPLETE');
+    expect(delays).toEqual([30_000]); expect(tree(root)).toEqual(before); operationLock(root)();
+  } finally { timer.mockRestore(); }
+});
+test('check help takes precedence over json refusal', () => {
+  const r = cli(['check', '--help', '--json']);
+  expect(r.status).toBe(0); expect(r.stdout).toContain('Usage:\n  cook check <recipe-path-or-url> [flags]'); expect(r.stderr).toBe('');
+});
+
+// Mock only recipe transport; execute the real CLI with closed stdin and fake
+// build tools. No test network server or external fetch is involved.
+function remoteInstall(recipe: unknown, args: string[], env: NodeJS.ProcessEnv, status = 200) {
+  const calls = join(dir, 'fetch-calls'), script = join(dir, 'remote-cli.ts');
+  writeFileSync(script, `import {appendFileSync} from 'node:fs';
+    globalThis.fetch = async url => {
+      appendFileSync(${JSON.stringify(calls)}, String(url)+'\\n');
+      return new Response(${JSON.stringify(JSON.stringify(recipe))}, {status:${status}});
+    };
+    const {main} = await import(${JSON.stringify(resolve(import.meta.dir, 'cli.ts'))});
+    await main(${JSON.stringify(['install', 'https://example.invalid/not-the-recipe-name.json', ...args])});`);
+  const r = spawnSync(process.execPath, [script], { cwd: dir, env: { PATH: process.env.PATH, HOME: dir, ...env }, input: '', encoding: 'utf8', timeout: 15000 });
+  return { r, calls: readFileSync(calls, 'utf8').trim().split('\n') };
+}
+test('default held install refuses after parent read before children credentials prompts or tools at EOF', () => {
+  const f = prepareFixture(), root = join(dir, '.connectome/installs/fixture');
+  mkdirSync(dirname(root), { recursive: true }); renameSync(fixture(), root);
+  const before = tree(root);
+  const { r, calls } = remoteInstall({ ...declaration.recipes['recipe.json'],
+    modules: { fleet: { children: [{ name: 'child', recipe: 'never-read-child.json' }] } },
+    mcpServers: { fixture: { command: 'npx', args: ['fixture'], env: { KEY: '${PROMPT_SENTINEL}' } } },
+  }, ['--env-file', join(dir, 'never-read.env'), '--pin-refs'], f.env);
+  expect(r.status).toBe(4); expect(r.stderr).toContain('E_HELD'); expect(r.stdout).toBe('');
+  expect(calls).toEqual(['https://example.invalid/not-the-recipe-name.json']);
+  expect(exists(f.effects)).toBe(false); expect(tree(root)).toEqual(before);
+});
+test('default legacy install reuses parent read with exactly one remote fetch', () => {
+  const f = prepareFixture();
+  const { r, calls } = remoteInstall(declaration.recipes['recipe.json'], ['--no-prompts', '--yes'], f.env);
+  expect(r.status).toBe(0); expect(calls).toEqual(['https://example.invalid/not-the-recipe-name.json']);
+  expect(exists(join(dir, '.connectome/installs/fixture/connectome.lock'))).toBe(true);
+  expect(exists(f.effects)).toBe(true);
+});
+test('default install parent fetch requiring credentials fails closed without prompting', () => {
+  const f = prepareFixture();
+  const { r, calls } = remoteInstall({}, [], f.env, 401);
+  expect(r.status).toBe(2); expect(r.stdout).toBe(''); expect(calls).toHaveLength(1);
+  expect(exists(f.effects)).toBe(false); expect(exists(join(dir, '.connectome'))).toBe(false);
 });

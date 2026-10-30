@@ -71,6 +71,14 @@ Private storage is not a public-export gate. Never publish private files or thei
 seed/result digests. JSON and human findings omit values, private provenance
 hashes, raw subprocess errors and paths outside R.
 
+Legacy `install` without `--out` must read the parent recipe to obtain the
+name used by `~/.connectome/installs/<slug>`. It reads that parent once, without
+secret resolution or prompts, then checks the destination before walking any
+children, reading credentials, prompting, pinning or building. Remote parent
+recipes use the same unauthenticated fetch as the legacy loader (no credential
+prompt); the loaded parent is reused, not fetched again. Explicit `--out` roots
+are checked before any recipe read.
+
 ## Persisted contracts
 
 All seven v1 contracts are validated by `src/candidate/schema.ts`. All fields
@@ -256,7 +264,7 @@ alone. Existing legacy exits/child exit propagation are unchanged except below.
 |---|---|
 | Existing v1 install with no candidate controls | Legacy run/reconcile remain; new inspection warns W_LEGACY_UNMANAGED. Verify reports missing metadata/proof; no implicit adoption. |
 | macOS/Windows/network or other unadmitted filesystem | Candidate mutations refuse E_IO before writes; legacy commands unaffected. |
-| Existing `cook check --json` caller | **Breaking:** exit 2 / E_JSON_UNSUPPORTED, stderr diagnostic, empty stdout, no findings document, before recipe reads/fetches. Previously warned and printed human output, possibly exiting 0. Use `cook check` without --json for recipe validation; verify is installed inspection, not JSON recipe check. |
+| Existing `cook check --json` caller | **Breaking:** exit 2 / E_JSON_UNSUPPORTED, stderr diagnostic, empty stdout, no findings document, before recipe reads/fetches. Previously warned and printed human output, possibly exiting 0. `check --help --json` still prints usage and exits 0. Use `cook check` without --json for recipe validation; verify is installed inspection, not JSON recipe check. |
 | Old lock reader/new candidate | Lock v1 still parses. Candidate run.sh refuses even when an older CLI launches it. Direct raw host commands are outside this guarantee. |
 | Old launcher/no new metadata | No retroactive production hold guarantee. `hold` refuses legacy targets with E_SCOPE. |
 | History/marker but no metadata | Fresh checker refuses independently of envelope validity; verify also reports missing metadata. Never synthesizes success. |

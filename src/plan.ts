@@ -18,6 +18,7 @@
  */
 
 import { resolve } from 'node:path';
+import type { Recipe } from './vendor/recipe.js';
 import { log } from './log.js';
 import type {
   EnvVar,
@@ -104,11 +105,12 @@ export type PlanResult =
 export async function resolvePlan(
   recipePath: string,
   opts: PlanOptions,
+  parentRecipe?: Recipe,
 ): Promise<PlanResult> {
   let walks: WalkResult[];
   try {
     log.step(`walking recipe ${log.dim(recipePath)}`);
-    walks = await walkRecipe(recipePath);
+    walks = await walkRecipe(recipePath, parentRecipe);
     log.success(`loaded ${walks.length} recipe${walks.length === 1 ? '' : 's'}`);
   } catch (err) {
     log.error(`failed to load recipe: ${err instanceof Error ? err.message : String(err)}`);
@@ -129,8 +131,25 @@ export async function resolvePlan(
   }
 
   let inspection: ReturnType<typeof inspectPlan>;
-  try { inspection = inspectPlan(walks, opts.strict); }
-  catch (err) { log.error(err instanceof Error ? err.message : String(err)); return { ok: false, exitCode: 2 }; }
+  try {
+    // Preserve legacy ordering: structural failures precede detection progress.
+    // inspectPlan also validates for independent, offline callers.
+    validatePlanWalks(walks);
+    log.step(`detecting MCP sources (${opts.strict ? 'strict' : 'non-strict'})`);
+    inspection = inspectPlan(walks, opts.strict);
+    const extCount = inspection.sources.filter(s => s.role === 'extension').length
+      + inspection.localExtensions.length;
+    log.success(
+      `detected ${inspection.sources.length} source${inspection.sources.length === 1 ? '' : 's'}` +
+      `${extCount > 0 ? ` (incl. ${extCount} extension${extCount === 1 ? '' : 's'})` : ''}, ` +
+      `${inspection.envVars.length} env var${inspection.envVars.length === 1 ? '' : 's'}`,
+    );
+  } catch (err) {
+    const messages = err instanceof PlanInspectionError ? err.messages
+      : [err instanceof Error ? err.message : String(err)];
+    for (const message of messages) log.error(message);
+    return { ok: false, exitCode: 2 };
+  }
   const { sources, localExtensions, envVars } = inspection;
 
   // Resolve required env values.  Precedence: --env-file > process.env > prompts.
@@ -265,18 +284,41 @@ export async function resolvePlan(
   };
 }
 
+/** Structured inspection errors keep logging out of the shared inspector. */
+export class PlanInspectionError extends Error {
+  constructor(public readonly messages: string[]) { super(messages.join('\n')); }
+}
+
+function validatePlanWalks(walks: WalkResult[]): void {
+  const parentWalk = walks[0];
+  if (!parentWalk) throw new Error('No recipes');
+  const collisions = detectRecipeFilenameCollisions(walks.map(w => w.path));
+  if (collisions.size) throw new PlanInspectionError(
+    Array.from(collisions, ([filename, paths]) =>
+      `recipe filename collision: ${paths.join(' and ')} would both be shipped ` +
+      `as recipes/${filename}.  Rename one of the files — walked recipes are ` +
+      `copied into a single flat directory.`,
+    ),
+  );
+  for (const child of walks.slice(1)) {
+    if (child.recipe.services?.length) throw new PlanInspectionError([
+      `child recipe ${child.path} declares services (sidecars), but only the ` +
+      `parent recipe's services are deployed.  Move the services declaration ` +
+      `to the parent recipe (${parentWalk.path}).`,
+    ]);
+    if (child.recipe.containerTemplateFiles?.length) throw new PlanInspectionError([
+      `child recipe ${child.path} declares containerTemplateFiles, but only the ` +
+      `parent recipe's are rendered.  Move them to the parent recipe (${parentWalk.path}).`,
+    ]);
+  }
+}
+
 /** Pure declaration inspection shared by legacy resolution and offline candidate
  * verification. No fetches, probes, credential reads or prompts. */
 export function inspectPlan(walks: WalkResult[], strict: boolean): {
   sources: McpSource[]; localExtensions: LocalExtension[]; envVars: EnvVar[];
 } {
-  if (!walks[0]) throw new Error('No recipes');
-  const collisions = detectRecipeFilenameCollisions(walks.map(w => w.path));
-  if (collisions.size) throw new Error('recipe filename collision: rename colliding recipes before materialization');
-  for (const child of walks.slice(1)) {
-    if (child.recipe.services?.length) throw new Error('child recipe declares services; move them to the parent recipe');
-    if (child.recipe.containerTemplateFiles?.length) throw new Error('child recipe declares containerTemplateFiles; move them to the parent recipe');
-  }
+  validatePlanWalks(walks);
   const sources = detectSources(walks, { strict });
   const extensions = detectExtensions(walks, { strict });
   return { sources: [...sources, ...extensions.gitExtensions], localExtensions: extensions.localExtensions, envVars: collectEnvVars(walks) };

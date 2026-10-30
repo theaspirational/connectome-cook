@@ -58,7 +58,10 @@ function getFleetChildren(recipe: Recipe): RecipeFleetChild[] {
  * order, deduplicated by absolute resolved path. Cycles are handled by
  * skipping already-visited entries (no error, no infinite loop).
  */
-export async function walkRecipe(rootPath: string): Promise<WalkResult[]> {
+export async function walkRecipe(rootPath: string, parentRecipe?: Recipe): Promise<WalkResult[]> {
+  // An install preflight may already have read the parent to select its root.
+  // Reuse only that exact root; children still follow the normal loader.
+  const normalizedRoot = normalizeRoot(rootPath);
   const results: WalkResult[] = [];
   const visited = new Set<string>();
 
@@ -66,7 +69,7 @@ export async function walkRecipe(rootPath: string): Promise<WalkResult[]> {
     if (visited.has(loc)) return;
     visited.add(loc);
 
-    const recipe = await loadRecipeRaw(loc);
+    const recipe = loc === normalizedRoot && parentRecipe ? parentRecipe : await loadRecipeRaw(loc);
     results.push({ path: loc, recipe });
 
     const base = sourceBaseFor(loc);
@@ -76,6 +79,6 @@ export async function walkRecipe(rootPath: string): Promise<WalkResult[]> {
     }
   }
 
-  await visit(normalizeRoot(rootPath));
+  await visit(normalizedRoot);
   return results;
 }
