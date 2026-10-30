@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeAll, afterAll } from 'bun:test';
+import { describe, expect, test, beforeAll, afterAll, spyOn } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -83,4 +83,30 @@ describe('walkRecipe', () => {
       expect(results[1]?.recipe.name).toBe('B');
     });
   });
+});
+
+
+for (const remote of [false, true]) test(`preloaded parent reuse is root-only for a ${remote ? 'remote' : 'local'} two-level fleet`, async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'cook-walker-reuse-'));
+  const parentPath = remote ? 'https://example.invalid/fleet/parent.json' : join(tmp, 'parent.json');
+  const childPath = remote ? 'https://example.invalid/fleet/child.json' : join(tmp, 'child.json');
+  const parentObj = { name: 'Parent', agent: { systemPrompt: 'Parent only' },
+    modules: { fleet: { children: [{ name: 'child', recipe: 'child.json' }] } },
+  };
+  const childObj = { name: 'Child', agent: { systemPrompt: 'Child only' } };
+  const hits: string[] = [];
+  // The parent is already loaded: only the remote child may be fetched.
+  const fetcher = remote ? spyOn(globalThis, 'fetch').mockImplementation((async (input: string | URL | Request) => {
+    hits.push(String(input));
+    if (String(input) !== childPath) throw Error('unexpected fetch');
+    return new Response(JSON.stringify(childObj));
+  }) as typeof fetch) : undefined;
+  try {
+    if (!remote) writeFileSync(childPath, JSON.stringify(childObj));
+    // Parent deliberately absent from disk/transport: reuse must avoid rereading it.
+    const walks = await walkRecipe(parentPath, parentObj);
+    expect(walks).toHaveLength(2); expect(walks[0]?.recipe).toBe(parentObj);
+    expect(walks[1]?.path).toBe(childPath); expect(walks[1]?.recipe).toEqual(childObj);
+    if (remote) expect(hits).toEqual([childPath]);
+  } finally { fetcher?.mockRestore(); rmSync(tmp, { recursive: true, force: true }); }
 });

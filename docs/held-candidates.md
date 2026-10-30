@@ -77,7 +77,8 @@ secret resolution or prompts, then checks the destination before walking any
 children, reading credentials, prompting, pinning or building. Remote parent
 recipes use the same unauthenticated fetch as the legacy loader (no credential
 prompt); the loaded parent is reused, not fetched again. Explicit `--out` roots
-are checked before any recipe read.
+are checked before any recipe read. `install` and `build` help requests print
+usage without inspecting the output root, even when it is held.
 
 ## Persisted contracts
 

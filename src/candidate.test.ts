@@ -503,7 +503,8 @@ test('default held install refuses after parent read before children credentials
     modules: { fleet: { children: [{ name: 'child', recipe: 'never-read-child.json' }] } },
     mcpServers: { fixture: { command: 'npx', args: ['fixture'], env: { KEY: '${PROMPT_SENTINEL}' } } },
   }, ['--env-file', join(dir, 'never-read.env'), '--pin-refs'], f.env);
-  expect(r.status).toBe(4); expect(r.stderr).toContain('E_HELD'); expect(r.stdout).toBe('');
+  expect(r.status).toBe(4); expect(r.stderr).toContain('E_HELD');
+  expect(r.stdout).toBe('-> walking recipe https://example.invalid/not-the-recipe-name.json\n');
   expect(calls).toEqual(['https://example.invalid/not-the-recipe-name.json']);
   expect(exists(f.effects)).toBe(false); expect(tree(root)).toEqual(before);
 });
@@ -511,12 +512,23 @@ test('default legacy install reuses parent read with exactly one remote fetch', 
   const f = prepareFixture();
   const { r, calls } = remoteInstall(declaration.recipes['recipe.json'], ['--no-prompts', '--yes'], f.env);
   expect(r.status).toBe(0); expect(calls).toEqual(['https://example.invalid/not-the-recipe-name.json']);
+  expect(r.stdout.split('-> walking recipe ')).toHaveLength(2);
   expect(exists(join(dir, '.connectome/installs/fixture/connectome.lock'))).toBe(true);
   expect(exists(f.effects)).toBe(true);
 });
 test('default install parent fetch requiring credentials fails closed without prompting', () => {
   const f = prepareFixture();
   const { r, calls } = remoteInstall({}, [], f.env, 401);
-  expect(r.status).toBe(2); expect(r.stdout).toBe(''); expect(calls).toHaveLength(1);
+  expect(r.status).toBe(2);
+  expect(r.stdout).toBe('-> walking recipe https://example.invalid/not-the-recipe-name.json\n'); expect(calls).toHaveLength(1);
   expect(exists(f.effects)).toBe(false); expect(exists(join(dir, '.connectome'))).toBe(false);
+});
+
+for (const command of ['install', 'build']) test(`${command} help precedes held output guard`, () => {
+  const root = fixture(), before = tree(root);
+  const plain = cli([command, '--help']);
+  const held = cli([command, '--out', root, '--help']);
+  expect(plain.status).toBe(0); expect(plain.stdout).toContain(`cook ${command}`);
+  expect(held.status).toBe(0); expect(held.stdout).toBe(plain.stdout); expect(held.stderr).toBe('');
+  expect(tree(root)).toEqual(before);
 });
