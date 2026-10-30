@@ -1,3 +1,4 @@
+import { diagnostic } from './log.js';
 /**
  * Source detector — Phase 1 of BUILD-PLAN.md.
  *
@@ -121,7 +122,7 @@ function warnConflict(
   first: { ref: SourceRef; value: string },
   next: { ref: SourceRef; value: string },
 ): void {
-  process.stderr.write(
+  diagnostic(
     `[source-detector] WARN: source ${key} has divergent ${field} — ` +
       `${first.ref.recipePath}#${first.ref.mcpServerName} says ${first.value}, ` +
       `${next.ref.recipePath}#${next.ref.mcpServerName} says ${next.value}; ` +

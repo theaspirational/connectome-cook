@@ -50,6 +50,8 @@ import {
 } from './requirements.js';
 
 export interface PlanOptions {
+  /** Candidate-only: never consult ambient secrets. */
+  fileOnly?: boolean;
   /** Fail on any MCP server / extension cook can't bake. */
   strict: boolean;
   /** Non-interactive: warn-and-continue on missing values. */
@@ -126,68 +128,10 @@ export async function resolvePlan(
     );
   }
 
-  // Every backend copies walked recipes flat into <out>/recipes/, so two
-  // sources sharing a shipped filename would silently overwrite each other
-  // (and the rewritten fleet child refs would point both children at the
-  // same file). Fail fast instead.
-  const collisions = detectRecipeFilenameCollisions(walks.map((w) => w.path));
-  if (collisions.size > 0) {
-    for (const [filename, paths] of collisions) {
-      log.error(
-        `recipe filename collision: ${paths.join(' and ')} would both be shipped ` +
-        `as recipes/${filename}.  Rename one of the files — walked recipes are ` +
-        `copied into a single flat directory.`,
-      );
-    }
-    return { ok: false, exitCode: 2 };
-  }
-
-  // Reject `services` / `containerTemplateFiles` on non-parent (child)
-  // recipes.  Cook only reads them from walks[0], so silently dropping
-  // them would deploy a stack missing its sidecars with no warning.
-  // Better to fail-fast and tell the operator to move them up.
-  for (let i = 1; i < walks.length; i++) {
-    const child = walks[i]!;
-    if (child.recipe.services && child.recipe.services.length > 0) {
-      log.error(
-        `child recipe ${child.path} declares services (sidecars), but only the ` +
-        `parent recipe's services are deployed.  Move the services declaration ` +
-        `to the parent recipe (${parentWalk.path}).`,
-      );
-      return { ok: false, exitCode: 2 };
-    }
-    if (child.recipe.containerTemplateFiles && child.recipe.containerTemplateFiles.length > 0) {
-      log.error(
-        `child recipe ${child.path} declares containerTemplateFiles, but only the ` +
-        `parent recipe's are rendered.  Move them to the parent recipe (${parentWalk.path}).`,
-      );
-      return { ok: false, exitCode: 2 };
-    }
-  }
-
-  let sources: McpSource[];
-  let localExtensions: LocalExtension[];
-  let envVars: EnvVar[];
-  try {
-    log.step(`detecting MCP sources (${opts.strict ? 'strict' : 'non-strict'})`);
-    sources = detectSources(walks, { strict: opts.strict });
-    // Extensions: git-sourced ones join the sources list (builder stages,
-    // secrets, systemPackages all reuse the MCP machinery); local bundles
-    // are copied from the operator's disk by the backend.
-    const detectedExts = detectExtensions(walks, { strict: opts.strict });
-    sources = [...sources, ...detectedExts.gitExtensions];
-    localExtensions = detectedExts.localExtensions;
-    envVars = collectEnvVars(walks);
-    const extCount = detectedExts.gitExtensions.length + localExtensions.length;
-    log.success(
-      `detected ${sources.length} source${sources.length === 1 ? '' : 's'}` +
-      `${extCount > 0 ? ` (incl. ${extCount} extension${extCount === 1 ? '' : 's'})` : ''}, ` +
-      `${envVars.length} env var${envVars.length === 1 ? '' : 's'}`,
-    );
-  } catch (err) {
-    log.error(err instanceof Error ? err.message : String(err));
-    return { ok: false, exitCode: 2 };
-  }
+  let inspection: ReturnType<typeof inspectPlan>;
+  try { inspection = inspectPlan(walks, opts.strict); }
+  catch (err) { log.error(err instanceof Error ? err.message : String(err)); return { ok: false, exitCode: 2 }; }
+  const { sources, localExtensions, envVars } = inspection;
 
   // Resolve required env values.  Precedence: --env-file > process.env > prompts.
   // (Single source-of-truth — see prompts.ts::resolveValue.)
@@ -319,4 +263,21 @@ export async function resolvePlan(
       options: opts,
     },
   };
+}
+
+/** Pure declaration inspection shared by legacy resolution and offline candidate
+ * verification. No fetches, probes, credential reads or prompts. */
+export function inspectPlan(walks: WalkResult[], strict: boolean): {
+  sources: McpSource[]; localExtensions: LocalExtension[]; envVars: EnvVar[];
+} {
+  if (!walks[0]) throw new Error('No recipes');
+  const collisions = detectRecipeFilenameCollisions(walks.map(w => w.path));
+  if (collisions.size) throw new Error('recipe filename collision: rename colliding recipes before materialization');
+  for (const child of walks.slice(1)) {
+    if (child.recipe.services?.length) throw new Error('child recipe declares services; move them to the parent recipe');
+    if (child.recipe.containerTemplateFiles?.length) throw new Error('child recipe declares containerTemplateFiles; move them to the parent recipe');
+  }
+  const sources = detectSources(walks, { strict });
+  const extensions = detectExtensions(walks, { strict });
+  return { sources: [...sources, ...extensions.gitExtensions], localExtensions: extensions.localExtensions, envVars: collectEnvVars(walks) };
 }

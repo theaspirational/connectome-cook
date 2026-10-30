@@ -1,3 +1,4 @@
+import { diagnostic } from './log.js';
 /**
  * Extension detector — the `extensions` counterpart of source-detector.
  *
@@ -75,7 +76,7 @@ function normalizeEntry(path: string): string {
 }
 
 function warnDivergent(name: string, field: string, first: string, next: string): void {
-  process.stderr.write(
+  diagnostic(
     `[extension-detector] WARN: extension "${name}" has divergent ${field} — ` +
     `"${first}" vs "${next}"; keeping the first.\n`,
   );
@@ -151,7 +152,7 @@ export function detectExtensions(
     );
   } else {
     for (const u of unbakeable) {
-      process.stderr.write(
+      diagnostic(
         `[extension-detector] WARN: ${u.recipePath} :: extensions.${u.name} has absolute path ` +
         `${u.path} and no source — not baked; the operator must bind-mount the code at that path.\n`,
       );

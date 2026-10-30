@@ -31,3 +31,11 @@ export function gitEnvironment(base = processAllowlistEnv()): NodeJS.ProcessEnv 
   }
   return env;
 }
+
+/** New non-interactive candidate operations never forward ambient Git/SSH
+ * authentication/configuration hooks. Legacy acquisition keeps its API. */
+export function candidateGitEnvironment(base = processAllowlistEnv()): NodeJS.ProcessEnv {
+  return { ...base, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false',
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_SSH_COMMAND: 'ssh -oBatchMode=yes -oStrictHostKeyChecking=yes' };
+}

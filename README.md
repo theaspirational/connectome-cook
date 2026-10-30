@@ -239,3 +239,23 @@ For now this lives in @Tengro's namespace. Once the CLI is meaningfully battle-t
 ## License
 
 Apache 2.0. See [LICENSE](./LICENSE).
+
+## Disposable held candidates (PR01b)
+
+An opt-in `cook install --hold` prepares an empty-root, single-agent candidate
+with explicit UUID identity/lineage, a frozen version envelope, private seed
+boundary and an immutable one-way launch refusal. `cook verify` inspects it
+without launching, fetching, prompting or clearing hold. There is no production
+ingest adapter or activation path in this slice.
+
+Candidate mutations require Linux, util-linux **`/usr/bin/flock`**, an admitted
+local filesystem and a successful inherited-descriptor lock preflight. Existing
+legacy commands retain their platform support and interactive behavior.
+
+**Compatibility change:** `cook check --json` now exits **2** with
+`E_JSON_UNSUPPORTED` on stderr and **empty stdout**, before reading a recipe.
+It no longer warns and falls back to human text.
+
+See [held-candidate commands, all seven schemas, compatibility table and
+maintainer decisions](docs/held-candidates.md). Do not attach production data,
+credentials or consumers; even successful verification does not authorize launch.
