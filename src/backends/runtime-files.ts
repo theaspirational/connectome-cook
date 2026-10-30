@@ -59,7 +59,7 @@ export function warnIfRestrictiveTemplateMode(mode: number, origin: string): voi
  *  template rendering walks ALL `${VAR}` matches, not a known list. */
 export function buildValueBag(plan: InstallPlan): Record<string, string> {
   const valueBag: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) {
+  for (const [k, v] of Object.entries(plan.options.fileOnly ? {} : process.env)) {
     if (v !== undefined && v !== '') valueBag[k] = v;
   }
   for (const [k, v] of Object.entries(plan.envFileValues)) {
@@ -203,7 +203,7 @@ export function collectSidecarSecretFiles(
     for (const secName of svc.secrets ?? []) {
       if (seen.has(secName)) continue;
       seen.add(secName);
-      const value = resolveValue(secName, {
+      const value = plan.options.fileOnly ? (plan.envFileValues[secName] || undefined) : resolveValue(secName, {
         envFileValues: plan.envFileValues,
         promptedValues: plan.values,
       });

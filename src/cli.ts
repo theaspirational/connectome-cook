@@ -1,3 +1,6 @@
+import { candidateCommand, seedCommand, CANDIDATE_HELP } from './candidate/commands.js';
+import { guard } from './candidate/io.js';
+import { CandidateError } from './candidate/schema.js';
 import mri from 'mri';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -41,6 +44,9 @@ ${log.bold('Commands:')}
   install <recipe>       Install directly onto this machine (no docker)
   run <recipe|dir>       Launch a materialized deployment (build first if none)
   check <recipe>         Validate a recipe without writing files
+  hold <dir>             Inspect one-way candidate hold (--clear refuses)
+  seed check|complete    Inspect fresh history / bounded marker completion
+  verify <dir>          Read-only aggregate verification under hold
   init <name>            Scaffold a starter recipe
 
 ${log.bold('Global flags:')}
@@ -76,7 +82,7 @@ ${log.bold('Usage:')}
 
 ${log.bold('Flags:')}
   --strict               Fail if any MCP server lacks a \`source\` block
-  --json                 Machine-readable report (TODO)
+  --json                 Unsupported: exits 2 / E_JSON_UNSUPPORTED
   --help, -h             Show this message
 `;
 
@@ -98,6 +104,8 @@ async function runBuildPipeline(argv: string[]): Promise<BuildResult> {
     string: ['out', 'env-file', 'image-name'],
     alias: { h: 'help' },
   });
+
+  if (flags.out) guard(resolve(flags.out));
 
   if (flags.help) {
     process.stdout.write(BUILD_USAGE);
@@ -179,14 +187,17 @@ ${log.bold('Flags:')}
 `;
 
 async function handleInstall(argv: string[]): Promise<number> {
+  if (argv.some(a => a === '--hold' || a.startsWith('--hold='))) return candidateCommand('prepare', argv);
   const flags = mri(argv, {
     boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates'],
     string: ['out', 'env-file', 'ch-repo', 'ch-ref'],
     alias: { h: 'help' },
   });
 
+  if (flags.out) guard(resolve(flags.out));
+
   if (flags.help) {
-    process.stdout.write(INSTALL_USAGE);
+    process.stdout.write(INSTALL_USAGE + CANDIDATE_HELP);
     return 0;
   }
 
@@ -273,6 +284,7 @@ Build flags are the same as ${log.bold('cook build')}.  Anything after \`--\` go
  *  or copies the output dir, and launching a different deployment than the
  *  one explicitly named would be silently wrong. */
 function launchFromLock(dir: string, passthroughArgs: string[]): Promise<number> {
+  guard(dir);
   let lock;
   try {
     lock = readLockfile(dir);
@@ -329,6 +341,7 @@ async function findMaterialization(
     // Unloadable recipe — the build path will surface the real error.
   }
   for (const dir of candidates) {
+    guard(dir);
     if (existsSync(join(dir, LOCKFILE_NAME))) return dir;
   }
   return null;
@@ -357,6 +370,11 @@ async function handleRun(argv: string[]): Promise<number> {
   });
   const [target] = runFlags._ as string[];
 
+  if (runFlags.out) guard(resolve(runFlags.out));
+  if (target) guard(resolve(target));
+  // Even rebuild/fresh routes must inspect the selected recipe target first.
+  const selected = target ? await findMaterialization(target, runFlags.out) : null;
+
   // Build-affecting flags mean the operator wants a fresh materialization —
   // launching a stale dir while silently ignoring them would be wrong.
   const wantsFreshBuild = runFlags.rebuild
@@ -374,7 +392,7 @@ async function handleRun(argv: string[]): Promise<number> {
 
   // 2. Recipe with an existing materialization — launch without re-resolving.
   if (target && !wantsFreshBuild) {
-    const found = await findMaterialization(target, runFlags.out);
+    const found = selected;
     if (found) {
       log.info(`found existing materialization ${log.dim(found)} (use --rebuild to re-cook)`);
       return launchFromLock(found, passthroughArgs);
@@ -408,6 +426,11 @@ async function handleCheck(argv: string[]): Promise<number> {
     alias: { h: 'help' },
   });
 
+  if (flags.json) {
+    process.stderr.write('E_JSON_UNSUPPORTED: check --json is not implemented; use verify for installed findings.\n');
+    return 2;
+  }
+
   if (flags.help) {
     process.stdout.write(CHECK_USAGE);
     return 0;
@@ -418,10 +441,6 @@ async function handleCheck(argv: string[]): Promise<number> {
     log.error('check: missing recipe path');
     process.stderr.write(`\n${CHECK_USAGE}`);
     return 1;
-  }
-
-  if (flags.json) {
-    log.warn('--json: not yet implemented; printing human-readable report');
   }
 
   let walks;
@@ -560,6 +579,9 @@ const SUBCOMMANDS: Record<string, SubcommandHandler> = {
   run: handleRun,
   check: handleCheck,
   init: handleInit,
+  hold: args => candidateCommand('hold', args),
+  seed: seedCommand,
+  verify: args => candidateCommand('verify', args),
 };
 
 export async function main(argv: string[]): Promise<void> {
@@ -587,6 +609,9 @@ export async function main(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const exitCode = await handler(argv.slice(1));
-  process.exit(exitCode);
+  try { process.exit(await handler(argv.slice(1))); }
+  catch (error) {
+    if (error instanceof CandidateError) { process.stderr.write(`${error.code}: candidate operation refused.\n`); process.exit(error.exitCode); }
+    throw error;
+  }
 }
