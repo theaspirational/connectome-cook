@@ -208,11 +208,24 @@ async function handleInstall(argv: string[]): Promise<number> {
     return 1;
   }
 
+  // The default name lives inside the parent recipe, not in its filename.
+  // Read that parent once (no values, prompts or child walking), then refuse
+  // before resolving anything else. Pass it onward to avoid a second fetch.
+  let parentRecipe: Recipe | undefined;
+  if (!flags.out) {
+    try { parentRecipe = await loadRecipeRaw(recipePath); }
+    catch (err) {
+      log.error(`failed to load recipe: ${err instanceof Error ? err.message : String(err)}`);
+      return 2;
+    }
+    guard(join(homedir(), '.connectome', 'installs', slugify(parentRecipe.name)));
+  }
+
   const planResult = await resolvePlan(recipePath, {
     strict: !!flags.strict,
     noPrompts: flags.prompts === false,
     envFile: flags['env-file'],
-  });
+  }, parentRecipe);
   if (!planResult.ok) return planResult.exitCode;
 
   const chRepoUrl = flags['ch-repo'] ?? DEFAULT_CH_REPO_URL;
@@ -426,14 +439,14 @@ async function handleCheck(argv: string[]): Promise<number> {
     alias: { h: 'help' },
   });
 
-  if (flags.json) {
-    process.stderr.write('E_JSON_UNSUPPORTED: check --json is not implemented; use verify for installed findings.\n');
-    return 2;
-  }
-
   if (flags.help) {
     process.stdout.write(CHECK_USAGE);
     return 0;
+  }
+
+  if (flags.json) {
+    process.stderr.write('E_JSON_UNSUPPORTED: check --json is not implemented; use verify for installed findings.\n');
+    return 2;
   }
 
   const [recipePath] = flags._ as string[];
