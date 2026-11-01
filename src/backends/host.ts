@@ -68,9 +68,9 @@ import type { BuildResult } from './docker.js';
 export interface HostBackendOptions {
   /** Internal held-candidate preparation; CLI cannot bypass the hold guard. */
   candidate?: boolean;
-  /** Both absolute paths opt into fail-closed host engine validation. */
   /** Export a static user unit under the installation; never install/start it. */
   userUnit?: string;
+  /** Both absolute paths opt into fail-closed host engine validation. */
   bunPath?: string;
   /** Absolute Node path, required together with bunPath. */
   nodePath?: string;
