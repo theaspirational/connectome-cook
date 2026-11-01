@@ -23,7 +23,7 @@ export function credentialBindings(value: unknown): CredentialBindings {
     for (const [consumer, mapping] of Object.entries(c.consumers)) {
       if (!/^[A-Za-z0-9_-]+$/.test(consumer) || !mapping || typeof mapping !== 'object' || Array.isArray(mapping) || !Object.keys(mapping).length) refuse();
       for (const [env, name] of Object.entries(mapping)) {
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(env) || /^(?:PATH|NODE_OPTIONS|BUN_OPTIONS|ENV|BASH_ENV|SHELLOPTS|IFS|PWD|LD_.*|DYLD_.*)$/.test(env) || typeof name !== 'string' || !Object.hasOwn(c.files, name)) refuse();
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(env) || /^(?:PATH|NODE_.*|BUN_.*|SSL_.*|.*_PROXY|GIT_SSH.*|ENV|BASH_ENV|SHELLOPTS|IFS|PWD|LD_.*|DYLD_.*)$/i.test(env) || typeof name !== 'string' || !Object.hasOwn(c.files, name)) refuse();
       }
     }
     validateSecretDirectories({ schema: 'connectome.secret-files/v1', root: c.root, files: c.files });

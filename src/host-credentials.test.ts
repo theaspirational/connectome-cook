@@ -100,3 +100,11 @@ test('failed consumer execution is redacted and does not echo loaded values', ()
   expect(result.stdout).toBe('');
   expect(result.stderr).toBe('E_CREDENTIAL_LAUNCH: credential consumer refused.\n');
 });
+
+test('credential environment denylist covers module, TLS, proxy and SSH controls in any case', () => {
+  for (const env of ['NODE_PATH', 'NODE_EXTRA_CA_CERTS', 'NODE_DEBUG', 'BUN_INSTALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR',
+    'HTTPS_PROXY', 'https_proxy', 'HtTpS_pRoXy', 'ALL_PROXY', 'NO_PROXY', 'GIT_SSH', 'GIT_SSH_COMMAND',
+    'git_ssh_variant', 'node_path', 'bun_install', 'ssl_cert_dir']) {
+    expect(() => credentialBindings({ ...c, consumers: { local: { [env]: 'token' } } })).toThrow('E_CREDENTIAL_BINDINGS');
+  }
+});
