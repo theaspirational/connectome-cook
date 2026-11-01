@@ -268,6 +268,6 @@ For named raw secret files without fetch, build or service effects, see
 ### Deployment manifest export (opt-in)
 
 `cook deployment export` explicitly extends the existing version envelope with
-role/owner, profile, provider-name, unit and artifact bindings plus the config
+role/owner, profile, provider-name, unit and artifact bindings plus an optional config
 Git revision. See [the manifest contract and export command](docs/deployment-manifest.md).
 This declares recovery inputs; it does not back up data, install or attest running.

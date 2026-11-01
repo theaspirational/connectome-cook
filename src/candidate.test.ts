@@ -27,7 +27,6 @@ const records: Records = {
   'connectome.ingest-intent/v1': intent, 'connectome.ingest-result/v1': result,
   'connectome.seed-consumed/v1': markerFor(result),
   'connectome.findings/v1': report('verify', true, [issue('I_HELD', 'hold')]),
-  'connectome.observed-running/v1': { schema: 'connectome.observed-running/v1', agent, revision: digest, transaction: { id: agent.id, outcome: 'complete' }, observedAt: time, units: ['fixture.service'], status: 'running' },
 };
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'cook-candidate-')); });
 afterEach(() => { rmSync(dir, { recursive: true, force: true }); });

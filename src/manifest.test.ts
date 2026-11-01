@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { readLockfile } from './lockfile.js';
-import { exportManifest, extendEnvelope, materializationV1, readObservation } from './candidate/manifest.js';
-import { canonical, deploymentRevision, hash, parseJSON, validate, type Envelope, type Manifest, type RunningObservation } from './candidate/schema.js';
+import { prepare } from './candidate/prepare.js';
+import { deploymentRevision, exportManifest, extendEnvelope, materializationV1 } from './candidate/manifest.js';
+import { canonical, hash, parseJSON, validate, type Envelope, type Manifest } from './candidate/schema.js';
 
 const historical = resolve(import.meta.dir, '../test/fixtures/deployment-v1');
 const lockBytes = readFileSync(join(historical, 'connectome.lock'), 'utf8');
@@ -35,10 +36,6 @@ function reseal(e: Envelope): Envelope { e.manifest!.revision = deploymentRevisi
 function cli(args: string[]) {
   return spawnSync(process.execPath, [resolve(import.meta.dir, '../bin/cook'), 'deployment', ...args], { cwd: dir, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir, BUN_RUNTIME_TRANSPILER_CACHE_PATH: '0', API_TOKEN: secret } });
 }
-function observation(e: Envelope): RunningObservation {
-  return { schema: 'connectome.observed-running/v1', agent: e.agent, revision: e.manifest!.revision, transaction: { id: e.agent.id, outcome: 'complete' }, observedAt: '2026-11-01T00:00:00.000Z', units: e.manifest!.units.map(u => u.name), status: 'running' };
-}
-
 for (const [label, profiles, split] of [
   ['single user unit', ['default'], false],
   ['two profiles', ['primary', 'secondary'], false],
@@ -74,9 +71,37 @@ test('unknown envelope/record schema and duplicate JSON keys reject', () => {
   expect(() => validate('connectome.unknown/v1' as 'connectome.deployment/v1', legacy)).toThrow('E_SCHEMA');
   expect(() => parseJSON('{"schema":1,"schema":2}')).toThrow('E_SCHEMA');
 });
-for (const kind of ['config', 'runtime', 'state', 'workspace', 'credentials']) test(`missing ${kind} role rejects`, () => {
+for (const kind of ['config', 'runtime']) test(`missing ${kind} role rejects`, () => {
   const b = bindings(); b.roles = b.roles.filter(r => r.kind !== kind);
   expect(() => manifest(b)).toThrow('E_SCHEMA');
+});
+for (const kind of ['state', 'workspace', 'credentials']) test(`${kind} role is optional without providers`, () => {
+  const b = bindings(); b.providers = []; b.roles = b.roles.filter(r => r.kind !== kind);
+  expect(() => manifest(b)).not.toThrow();
+});
+test('providers require a credentials role', () => {
+  const b = bindings(); b.roles = b.roles.filter(r => r.kind !== 'credentials');
+  expect(() => manifest(b)).toThrow('E_SCHEMA');
+});
+test('only config and runtime roles are required', () => {
+  const b = bindings(); b.providers = []; b.roles = b.roles.filter(r => ['config', 'runtime'].includes(r.kind));
+  expect(parseJSON(exportManifest(manifest(b), lockBytes))).toEqual(manifest(b));
+});
+
+for (const count of [2, 3]) test(`${count}-unit ordering cycle rejects while an acyclic chain passes`, () => {
+  const b = bindings();
+  b.units = Array.from({ length: count }, (_, i) => ({ ...b.units[0]!, name: `unit-${i}.service`, after: [`unit-${(i + 1) % count}.service`] }));
+  expect(() => manifest(b)).toThrow('E_SCHEMA');
+  b.units[count - 1]!.after = [];
+  expect(() => manifest(b)).not.toThrow();
+});
+for (const direction of ['public-contains-private', 'private-contains-public']) test(`role nesting rejects: ${direction}`, () => {
+  for (const publicKind of ['config', 'runtime']) for (const privateKind of ['state', 'workspace', 'credentials']) {
+    const b = bindings(), publicRole = b.roles.find(r => r.kind === publicKind)!, privateRole = b.roles.find(r => r.kind === privateKind)!;
+    if (direction === 'public-contains-private') privateRole.path = `${publicRole.path}/private`;
+    else publicRole.path = `${privateRole.path}/public`;
+    expect(() => manifest(b)).toThrow('E_SCOPE');
+  }
 });
 
 test('full commit pins required for host and every component, never PR heads', () => {
@@ -107,10 +132,24 @@ test('same code with changed config revision or config bytes has distinct deploy
   expect(changed.agent).toEqual(e.agent);
 });
 
+test('configRevision may be absent or null; a supplied commit is revision-bound', () => {
+  const b = bindings(); delete b.configRevision;
+  const absent = manifest(b); expect(absent.manifest).not.toHaveProperty('configRevision');
+  expect(() => exportManifest(absent, lockBytes)).not.toThrow();
+  const nullable = manifest({ ...b, configRevision: null }); expect(nullable.manifest!.configRevision).toBeNull();
+  expect(() => exportManifest(nullable, lockBytes)).not.toThrow();
+  const present = manifest();
+  expect(present.manifest!.revision).not.toBe(absent.manifest!.revision);
+  expect(present.manifest!.revision).not.toBe(nullable.manifest!.revision);
+  for (const configRevision of ['main', 'a'.repeat(39), 'A'.repeat(40)]) expect(() => manifest({ ...b, configRevision })).toThrow('E_SCHEMA');
+});
+
 test('lock bytes and all declared bindings are integrity-bound', () => {
   const e = manifest();
   expect(() => exportManifest(e, lockBytes + '\n')).toThrow('E_DIGEST');
   e.manifest!.roles[0]!.owner.uid++;
+  expect(() => validate('connectome.deployment/v1', e)).not.toThrow();
+  expect(() => materializationV1(e, lockBytes)).toThrow('E_DIGEST');
   expect(() => exportManifest(e, lockBytes)).toThrow('E_DIGEST');
   expect(() => manifest({ ...bindings(), configRevision: 'main' })).toThrow('E_SCHEMA');
 });
@@ -134,8 +173,6 @@ test('provider references are names only; no values or private-value hashes in e
     const b = bindings(); Object.assign(b.providers[0]!, { [key]: secret });
     expect(() => manifest(b)).toThrow('E_SCHEMA');
   }
-  const e = manifest(); Object.assign(e, { observed: observation(e) });
-  expect(() => exportManifest(e, lockBytes)).toThrow('E_SCHEMA');
 });
 
 test('artifact hashes cannot cover private roles through nested path aliases', () => {
@@ -145,19 +182,6 @@ test('artifact hashes cannot cover private roles through nested path aliases', (
   }
   const b = bindings(); b.providers.push({ ...b.providers[0]!, name: 'another-provider' });
   expect(() => manifest(b)).toThrow('E_PATH');
-});
-
-test('observed running is separate and incomplete transactions can never report running', () => {
-  const e = manifest(); const o = observation(e);
-  expect(readObservation(o, e)).toEqual(o);
-  for (const outcome of ['pending', 'partial', 'uncertain', 'failed']) expect(() => readObservation({ ...o, transaction: { ...o.transaction, outcome } }, e)).toThrow('E_SCHEMA');
-  expect(() => readObservation({ ...o, transaction: null }, e)).toThrow('E_SCHEMA');
-  expect(() => readObservation({ ...o, units: [] }, e)).toThrow('E_SCHEMA');
-  expect(() => readObservation({ ...o, units: ['other.service'] }, e)).toThrow('E_PROOF_INCOMPLETE');
-  expect(() => readObservation({ ...o, revision: hash('other') }, e)).toThrow('E_DIGEST');
-  expect(() => readObservation({ ...o, agent: { ...o.agent, id: o.agent.lineage } }, e)).toThrow('E_IDENTITY');
-  expect(e.running).toBeNull(); expect(exportManifest(e, lockBytes)).not.toContain('observedAt');
-  expect(() => validate('connectome.deployment/v1', { ...e, running: o })).toThrow('E_SCHEMA');
 });
 
 test('CLI exports/promotes only on request without changing inputs or reading private roles', () => {
@@ -171,6 +195,9 @@ test('CLI exports/promotes only on request without changing inputs or reading pr
   expect(readdirSync(dir).map(n => [n, readFileSync(join(dir, n), 'utf8')])).toEqual(before);
   writeFileSync(join(dir, 'full.json'), r.stdout);
   expect(cli(['export', 'full.json', '--lock', 'lock']).stdout).toBe(r.stdout);
+  const refused = cli(['export', 'full.json', '--lock', 'lock', '--bindings', 'bindings.json']);
+  expect(refused.status).toBe(2); expect(refused.stdout).toBe(''); expect(refused.stderr).toContain('E_SCHEMA');
+  expect(() => extendEnvelope(manifest(), lockBytes, bindings())).toThrow('E_SCHEMA');
 });
 
 test('CLI refusals emit no partial manifest, input values or unsanitized paths', () => {
@@ -203,5 +230,31 @@ test('extension rejects an unversioned legacy shape or a supplied derived revisi
   expect(() => extendEnvelope(lock, lockBytes, bindings())).toThrow('E_SCHEMA');
   expect(() => manifest({ ...bindings(), revision: digest } as Omit<Manifest, 'revision'>)).toThrow('E_SCHEMA');
   const e = manifest(); e.manifest!.roles[0]!.path = '/changed';
-  expect(() => validate('connectome.deployment/v1', reseal(e))).not.toThrow();
+  expect(() => exportManifest(reseal(e), lockBytes)).not.toThrow();
+});
+
+test('real prepare output adapts and exports through explicit enrichment without network', async () => {
+  const host = join(dir, 'host'); mkdirSync(host);
+  writeFileSync(join(host, 'package.json'), '{"name":"fixture-host","version":"0.0.0"}\n');
+  const git = (args: string[]) => {
+    const r = spawnSync('git', args, { cwd: host, encoding: 'utf8' }); expect(r.status).toBe(0); return r.stdout.trim();
+  };
+  git(['init', '--initial-branch=main']); git(['add', '--', 'package.json']);
+  git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-m', 'Synthetic host fixture']);
+  const commit = git(['rev-parse', 'HEAD']);
+  const recipe = join(dir, 'recipe.json'); writeFileSync(recipe, '{"name":"Fixture","agent":{"systemPrompt":"Synthetic only"}}');
+  const root = join(dir, 'prepared');
+  const e = await prepare({ root, recipe, agent: legacy.agent, seedRequired: false, hostUrl: host, hostRef: 'main' });
+  const bytes = readFileSync(join(root, 'connectome.lock'), 'utf8');
+  expect(e.manifest).toBeUndefined(); expect(materializationV1(e, bytes)).toEqual(readLockfile(root)!);
+  expect(materializationV1(e, bytes).connectomeHost.commit).toBe(commit);
+  expect(() => exportManifest(e, bytes)).toThrow('E_PROOF_INCOMPLETE');
+  const b = bindings(); b.providers = []; b.roles = b.roles.filter(r => ['config', 'runtime'].includes(r.kind));
+  b.roles.find(r => r.kind === 'config')!.path = join(root, 'recipes'); b.roles.find(r => r.kind === 'runtime')!.path = root;
+  b.artifacts.find(a => a.name === 'configuration')!.digest = hash(readFileSync(join(root, 'recipes/recipe.json')));
+  b.artifacts.find(a => a.name === 'host')!.digest = hash(readFileSync(join(root, 'app/package.json')));
+  const full = extendEnvelope(e, bytes, b);
+  expect(materializationV1(full, bytes)).toEqual(readLockfile(root)!);
+  expect(parseJSON(exportManifest(full, bytes))).toEqual(full);
+  expect(readFileSync(join(root, 'connectome.deployment.json'), 'utf8')).toBe(canonical(e));
 });
