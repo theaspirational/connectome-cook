@@ -19,6 +19,19 @@ export interface Envelope {
   desired: { declaration: '.cook/declaration.json'; configDigest: string };
   materialized: { lock: 'connectome.lock'; lockVersion: 1; lockDigest: string };
   installed: null; running: null; lifecycle: 'held-candidate';
+  manifest?: Manifest;
+}
+export type RoleKind = 'config' | 'runtime' | 'state' | 'workspace' | 'credentials';
+export interface Manifest {
+  configRevision: string; revision: string; profiles: string[];
+  roles: Array<{ name: string; kind: RoleKind; path: string; owner: { uid: number; gid: number } }>;
+  providers: Array<{ name: string; required: boolean; consumer: string; role: string; destination: string }>;
+  units: Array<{ name: string; scope: 'user' | 'system'; profile: string; artifacts: string[]; after: string[] }>;
+  artifacts: Array<{ name: string; role: string; path: string; digest: string }>;
+}
+export interface RunningObservation {
+  schema: 'connectome.observed-running/v1'; agent: Agent; revision: string;
+  transaction: { id: string; outcome: 'complete' }; observedAt: string; units: string[]; status: 'running';
 }
 export interface Hold {
   schema: 'connectome.hold/v1'; agent: Agent; state: 'held'; scope: 'disposable-candidate';
@@ -48,6 +61,7 @@ export interface Records {
   'connectome.hold/v1': Hold; 'connectome.ingest-intent/v1': Intent;
   'connectome.ingest-result/v1': Result; 'connectome.seed-consumed/v1': Marker;
   'connectome.findings/v1': Findings;
+  'connectome.observed-running/v1': RunningObservation;
 }
 type Rule = (v: unknown) => boolean;
 const text: Rule = v => typeof v === 'string' && v.length > 0;
@@ -58,6 +72,23 @@ const object: Rule = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const closed = (shape: Record<string, Rule>): Rule => v => object(v) && Object.keys(v as object).length === Object.keys(shape).length && Object.entries(shape).every(([k, rule]) => Object.hasOwn(v as object, k) && rule((v as Record<string, unknown>)[k]));
 const agent = closed({ id: pattern(UUID), lineage: pattern(UUID) });
 const digest = pattern(DIGEST);
+const name = pattern(/^[A-Za-z0-9][A-Za-z0-9_.@-]*$/);
+const names: Rule = v => Array.isArray(v) && v.every(name) && new Set(v).size === v.length;
+const absolute = pattern(/^\/[^/\0\r\n]+(?:\/[^/\0\r\n]+)*$/);
+const relative = pattern(/^[^/\0\r\n]+(?:\/[^/\0\r\n]+)*$/);
+const cleanPath = (rule: Rule): Rule => v => rule(v) && !(v as string).split('/').some(p => p === '.' || p === '..') && !(v as string).includes('\\');
+const integer: Rule = v => Number.isSafeInteger(v) && (v as number) >= 0;
+const array = (rule: Rule): Rule => v => Array.isArray(v) && v.every(rule);
+const manifest = closed({ configRevision: pattern(/^[0-9a-f]{40}$/), revision: digest, profiles: names,
+  roles: array(closed({ name, kind: one('config', 'runtime', 'state', 'workspace', 'credentials'), path: cleanPath(absolute), owner: closed({ uid: integer, gid: integer }) })),
+  providers: array(closed({ name, required: one(true, false), consumer: name, role: name, destination: cleanPath(relative) })),
+  units: array(closed({ name, scope: one('user', 'system'), profile: name, artifacts: names, after: names })),
+  artifacts: array(closed({ name, role: name, path: cleanPath(relative), digest })),
+});
+const envelopeShape = { schema: one('connectome.deployment/v1'), agent,
+  desired: closed({ declaration: one('.cook/declaration.json'), configDigest: digest }),
+  materialized: closed({ lock: one('connectome.lock'), lockVersion: one(1), lockDigest: digest }),
+  installed: one(null), running: one(null), lifecycle: one('held-candidate') };
 const outcome = one('complete', 'partial', 'uncertain');
 const common = { operationId: pattern(UUID), agent, configDigest: digest, lockDigest: digest, seedDigest: digest, toolDigest: digest, namespace: text, adapterId: text };
 const checks = ['envelope', 'declaration', 'materialization', 'configuration', 'requirements', 'credentials', 'seed', 'handshakes', 'deferred', 'cli', 'hold'];
@@ -74,10 +105,9 @@ const recipes: Rule = v => {
   } catch { return false; }
 };
 const rules: Record<keyof Records, Rule> = {
-  'connectome.deployment/v1': closed({ schema: one('connectome.deployment/v1'), agent,
-    desired: closed({ declaration: one('.cook/declaration.json'), configDigest: digest }),
-    materialized: closed({ lock: one('connectome.lock'), lockVersion: one(1), lockDigest: digest }),
-    installed: one(null), running: one(null), lifecycle: one('held-candidate') }),
+  'connectome.deployment/v1': v => object(v) && (Object.hasOwn(v as object, 'manifest') ? closed({ ...envelopeShape, manifest })(v) : closed(envelopeShape)(v)),
+  'connectome.observed-running/v1': closed({ schema: one('connectome.observed-running/v1'), agent, revision: digest,
+    transaction: closed({ id: pattern(UUID), outcome: one('complete') }), observedAt: time, units: names, status: one('running') }),
   'connectome.declaration/v1': closed({ schema: one('connectome.declaration/v1'), agent, entry: text, recipes,
     host: closed({ url: text, ref: text }), seedRequired: one(true, false), dataDir: one('data') }),
   'connectome.hold/v1': closed({ schema: one('connectome.hold/v1'), agent, state: one('held'), scope: one('disposable-candidate'), reason: one('candidate-preparation', 'seed-pending', 'ingest-incomplete'), createdAt: time }),
@@ -87,7 +117,13 @@ const rules: Record<keyof Records, Rule> = {
   'connectome.findings/v1': closed({ schema: one('connectome.findings/v1'), supported: v => Array.isArray(v) && v.length > 0 && v.every(s => typeof s === 'string') && new Set(v).size === v.length && v.includes('connectome.findings/v1'), command: one('prepare', 'hold', 'hold-clear', 'seed-check', 'seed-complete', 'verify'), status: one('ok', 'warning', 'error'), held: one(true, false, null), activationAllowed: one(false), findings: v => Array.isArray(v) && v.every(finding) }),
 };
 export function validate<K extends keyof Records>(schema: K, value: unknown): Records[K] {
-  if (!rules[schema](value)) fail('E_SCHEMA');
+  if (!Object.hasOwn(rules, schema) || !rules[schema](value)) fail('E_SCHEMA');
+  if (schema === 'connectome.deployment/v1' && (value as Envelope).manifest) {
+    const e = value as Envelope;
+    validateManifest(e.manifest!);
+    if (e.manifest!.revision !== deploymentRevision(e)) fail('E_DIGEST');
+  }
+  if (schema === 'connectome.observed-running/v1' && !(value as RunningObservation).units.length) fail('E_SCHEMA');
   if (schema === 'connectome.declaration/v1') {
     const d = value as Declaration;
     if (!Object.hasOwn(d.recipes, d.entry)) fail('E_SCHEMA');
@@ -99,6 +135,32 @@ export function validate<K extends keyof Records>(schema: K, value: unknown): Re
   }
   if (schema === 'connectome.findings/v1' && (value as Findings).status !== status((value as Findings).findings)) fail('E_SCHEMA');
   return value as Records[K];
+}
+
+function validateManifest(m: Manifest): void {
+  for (const items of [m.roles, m.providers, m.units, m.artifacts]) if (new Set(items.map(x => x.name)).size !== items.length) fail('E_SCHEMA');
+  for (const kind of ['config', 'runtime', 'state', 'workspace', 'credentials']) if (!m.roles.some(r => r.kind === kind)) fail('E_SCHEMA');
+  if (!m.profiles.length || !m.units.length || !m.artifacts.length) fail('E_SCHEMA');
+  if (new Set(m.roles.map(r => r.path)).size !== m.roles.length) fail('E_PATH');
+  for (const p of m.providers) if (!m.profiles.includes(p.consumer) || !m.roles.some(r => r.name === p.role && r.kind === 'credentials')) fail('E_SCHEMA');
+  if (new Set(m.providers.map(p => `${p.role}/${p.destination}`)).size !== m.providers.length) fail('E_PATH');
+  for (const a of m.artifacts) if (!m.roles.some(r => r.name === a.role && ['config', 'runtime'].includes(r.kind))) fail('E_SCOPE');
+  for (const a of m.artifacts) {
+    const path = `${m.roles.find(r => r.name === a.role)!.path}/${a.path}`;
+    if (m.roles.some(r => ['state', 'workspace', 'credentials'].includes(r.kind) && (path === r.path || path.startsWith(r.path + '/') || r.path.startsWith(path + '/')))) fail('E_SCOPE');
+  }
+  for (const kind of ['config', 'runtime']) if (!m.artifacts.some(a => m.roles.some(r => r.name === a.role && r.kind === kind))) fail('E_SCHEMA');
+  for (const u of m.units) {
+    if (!m.profiles.includes(u.profile) || !u.artifacts.length || u.artifacts.some(a => !m.artifacts.some(x => x.name === a)) || u.after.some(n => n === u.name || !m.units.some(x => x.name === n))) fail('E_SCHEMA');
+  }
+  for (const p of m.profiles) if (!m.units.some(u => u.profile === p)) fail('E_SCHEMA');
+}
+
+/** Declared code/config/bindings only: observations never affect revision. */
+export function deploymentRevision(e: Envelope): string {
+  if (!e.manifest) return fail('E_SCHEMA');
+  const { revision: _revision, ...bindings } = e.manifest;
+  return hash(canonical({ agent: e.agent, desired: e.desired, materialized: e.materialized, bindings }));
 }
 
 /** Small strict JSON decoder: duplicate keys (including escaped aliases) must

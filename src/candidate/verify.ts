@@ -3,6 +3,7 @@ import { join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { processAllowlistEnv } from '../process-env.js';
 import { validateLock } from './lockfile.js';
+import { materializationV1 } from './manifest.js';
 import { lowerToConfiguration, recipeFilename } from '../configuration.js';
 import { generateOverlays } from '../generators/overlay.js';
 import { hostPathFor } from '../backends/host.js';
@@ -53,6 +54,7 @@ export function verify(root: string): Findings {
     if (hash(canonical(declaration)) !== envelope.desired.configDigest) add('E_DIGEST', 'declaration', '.cook/declaration.json');
   }
   if (envelope) check('materialization', 'connectome.lock', () => { if (hash(readPrivate(join(root, 'connectome.lock'))) !== envelope.materialized.lockDigest) fail('E_DIGEST'); });
+  if (envelope?.manifest) check('materialization', 'manifest', () => { materializationV1(envelope, readPrivate(join(root, 'connectome.lock'))); });
   check('hold', 'run.sh', () => {
     privateFile(join(root, 'run.sh'), 0o700);
     if (!readFileSync(join(root, 'run.sh'), 'utf8').includes('connectome.candidate-launcher/v1')) fail('E_SCOPE');

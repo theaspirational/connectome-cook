@@ -1,8 +1,8 @@
-import { validateLock } from './lockfile.js';
+import { materializationV1 } from './manifest.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { readdirSync } from 'node:fs';
-import { canonical, fail, hash, parseJSON, validate, type Envelope, type Declaration, type Hold, type Intent, type Result, type Marker } from './schema.js';
+import { canonical, fail, hash, validate, type Envelope, type Declaration, type Hold, type Intent, type Result, type Marker } from './schema.js';
 import { fresh, operationLock, publish, readPrivate, readRecord, privateDir } from './io.js';
 
 export interface Binding { envelope: Envelope; declaration: Declaration; hold: Hold }
@@ -12,7 +12,7 @@ export function bindings(root: string): Binding {
   const hold = readRecord(root, '.cook/hold.json', 'connectome.hold/v1');
   if (canonical(envelope.agent) !== canonical(declaration.agent) || canonical(envelope.agent) !== canonical(hold.agent)) fail('E_IDENTITY');
   if (hash(canonical(declaration)) !== envelope.desired.configDigest || hash(readPrivate(join(root, 'connectome.lock'))) !== envelope.materialized.lockDigest) fail('E_DIGEST');
-  const lock = validateLock(parseJSON(readPrivate(join(root, 'connectome.lock'))));
+  const lock = materializationV1(envelope, readPrivate(join(root, 'connectome.lock')));
   if (lock.launch.kind !== 'script' || lock.launch.script !== join(root, 'run.sh') || lock.connectomeHost.path !== join(root, 'app')) fail('E_PATH');
   privateDir(join(root, 'data'));
   return { envelope, declaration, hold };

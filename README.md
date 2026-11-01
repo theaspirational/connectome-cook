@@ -264,3 +264,10 @@ credentials or consumers; even successful verification does not authorize launch
 
 For named raw secret files without fetch, build or service effects, see
 [the private-file declaration and save contract](docs/secret-files.md).
+
+### Deployment manifest export (opt-in)
+
+`cook deployment export` explicitly extends the existing version envelope with
+role/owner, profile, provider-name, unit and artifact bindings plus the config
+Git revision. See [the manifest contract and export command](docs/deployment-manifest.md).
+This declares recovery inputs; it does not back up data, install or attest running.

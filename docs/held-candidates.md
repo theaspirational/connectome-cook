@@ -6,8 +6,10 @@ adopt an existing installation, clear a hold, replace history, or certify a
 running version. Successful static inspection is not authorization to launch.
 Deleting metadata is not a supported workaround: the candidate launcher has
 no reachable launch tail. Activation and qualified ingest are deferred to PR08;
-managed launchers/units to PR06, deployment/recovery history to PR03, private
+managed launchers/units to PR06, private
 provider writes to PR02, exact closure/connector qualification to PR10.
+The opt-in [deployment/recovery declaration](deployment-manifest.md) extends
+this envelope without adding a history writer or changing preparation.
 
 ## Commands and platform
 
@@ -82,12 +84,14 @@ usage without inspecting the output root, even when it is held.
 
 ## Persisted contracts
 
-All seven v1 contracts are validated by `src/candidate/schema.ts`. All fields
+The original seven v1 contracts are validated by `src/candidate/schema.ts`. All fields
 listed below are required, objects are closed (unknown fields reject), schema
 IDs are exact, and duplicate JSON keys/nonfinite numbers reject. Recipe objects
 use the existing recipe validator, including their extension payload format.
 All maps have unique keys. Schema migration must be explicit; never silently
 reinterpret durable v1 records.
+The deployment envelope also accepts the explicit optional `manifest` binding;
+see [its complete shape and separate observation record](deployment-manifest.md).
 
 Common types:
 

@@ -597,6 +597,7 @@ const SUBCOMMANDS: Record<string, SubcommandHandler> = {
   seed: seedCommand,
   verify: args => candidateCommand('verify', args),
   secret: args => import('./secret-save.js').then(m => m.secretCommand(args)),
+  deployment: args => import('./candidate/manifest.js').then(m => m.deploymentCommand(args)),
 };
 
 export async function main(argv: string[]): Promise<void> {
