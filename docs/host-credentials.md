@@ -41,6 +41,8 @@ absolute Bun/Node engines. Bindings are declarations, never values:
     }
 
 The root is provisioned during installation but its files are not read.
+Existing declared file-parent directories are validated before confirmation or
+output-root creation, alongside the credentials root.
 It must be dedicated and outside runtime; with --layout it must exactly equal
 the layout's credentials root. The file map can be used in a separate
 secret-files declaration for provision/save. File paths are strict relative
@@ -50,8 +52,12 @@ Each consumer names an existing stdio entry by name throughout the recipe
 tree. Its original command must be an absolute executable, or exactly node/bun
 (which engine preflight resolves absolutely). WebSocket consumers, unknown
 names, legacy credentialFiles, pre-existing bindings of the same environment
-name, state-env collisions and executable-loader variables such as PATH,
-NODE_OPTIONS or LD_PRELOAD refuse. Held preparation rejects the option.
+name, state-env collisions and executable-loader variables refuse. The denylist
+includes PATH, ENV, BASH_ENV, SHELLOPTS, IFS, PWD, LD_*, DYLD_*, NODE_*, BUN_*,
+SSL_*, *_PROXY and GIT_SSH* (case-insensitive). This is defense in depth, not
+an exhaustive list of process-control variables: audit consumer-specific
+configuration knobs before declaring any environment binding. Held preparation
+rejects the option.
 
 Cook emits a private standalone Node adapter for each matching lowered recipe
 entry and changes only that entry's command/args to the selected absolute Node
