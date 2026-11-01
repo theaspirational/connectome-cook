@@ -1,3 +1,4 @@
+import { diagnostic } from './log.js';
 /**
  * Source detector — Phase 1 of BUILD-PLAN.md.
  *
@@ -20,6 +21,7 @@
  */
 
 import { basename } from 'node:path';
+import { assertCredentialFreeSourceUrl } from './source-url.js';
 import type {
   InstallPattern,
   McpSource,
@@ -120,7 +122,7 @@ function warnConflict(
   first: { ref: SourceRef; value: string },
   next: { ref: SourceRef; value: string },
 ): void {
-  process.stderr.write(
+  diagnostic(
     `[source-detector] WARN: source ${key} has divergent ${field} — ` +
       `${first.ref.recipePath}#${first.ref.mcpServerName} says ${first.value}, ` +
       `${next.ref.recipePath}#${next.ref.mcpServerName} says ${next.value}; ` +
@@ -217,6 +219,7 @@ function addSourcedServer(
   source: RecipeMcpServerGitSource,
   ref: SourceRef,
 ): void {
+  assertCredentialFreeSourceUrl(source.url, `${ref.recipePath} :: mcpServers.${ref.mcpServerName}.source.url`);
   const refStr = source.ref ?? 'main';
   const key = `${normalizeUrlForKey(source.url)}@${refStr}`;
   const install = mapInstall(source.install);

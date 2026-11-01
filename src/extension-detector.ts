@@ -1,3 +1,4 @@
+import { diagnostic } from './log.js';
 /**
  * Extension detector — the `extensions` counterpart of source-detector.
  *
@@ -30,6 +31,7 @@
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { assertCredentialFreeSourceUrl } from './source-url.js';
 import type {
   InstallPattern,
   LocalExtension,
@@ -74,7 +76,7 @@ function normalizeEntry(path: string): string {
 }
 
 function warnDivergent(name: string, field: string, first: string, next: string): void {
-  process.stderr.write(
+  diagnostic(
     `[extension-detector] WARN: extension "${name}" has divergent ${field} — ` +
     `"${first}" vs "${next}"; keeping the first.\n`,
   );
@@ -150,7 +152,7 @@ export function detectExtensions(
     );
   } else {
     for (const u of unbakeable) {
-      process.stderr.write(
+      diagnostic(
         `[extension-detector] WARN: ${u.recipePath} :: extensions.${u.name} has absolute path ` +
         `${u.path} and no source — not baked; the operator must bind-mount the code at that path.\n`,
       );
@@ -176,6 +178,7 @@ function addGitExtension(
   errors: string[],
 ): void {
   const source = ext.source!;
+  assertCredentialFreeSourceUrl(source.url, `${ref.recipePath} :: extensions.${name}.source.url`);
   if (isAbsolute(ext.path)) {
     errors.push(
       `${ref.recipePath} :: extensions.${name}: with a 'source' block, 'path' must be ` +

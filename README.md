@@ -95,6 +95,40 @@ Cook probes the candidates, suggests the first hit, lets you confirm or
 override, and exposes the answer as `$SPRING_HOME` — usable in recipe
 `${VAR}` references and install steps, and recorded in the lock.
 
+### Host build environment and source credentials
+
+Git pin resolution and host materialization share the same filtered process
+environment as install commands (`bun install`, npm/pip installs, and custom scripts).
+The parent-variable allowlist is:
+
+- `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `TERM`, `CI`;
+- `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` and their lowercase forms;
+- `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `SSL_CERT_DIR`.
+
+Host materialization adds resolved `requirements` under their `exposeAs` names.
+Git alone also receives existing `SSH_AUTH_SOCK`, `GIT_SSH`, `GIT_SSH_COMMAND`,
+`GIT_SSH_VARIANT`, `GIT_ASKPASS`, `SSH_ASKPASS`, and `GIT_TERMINAL_PROMPT` settings
+for external authentication. It also receives `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`,
+`XDG_CONFIG_HOME`, and `GIT_CONFIG_COUNT` with its indexed `GIT_CONFIG_KEY_n` /
+`GIT_CONFIG_VALUE_n` entries. Builds receive none of these Git-only variables.
+Declare non-secret build inputs as requirements; arbitrary parent variables,
+runtime credentials, and other `--env-file` entries are not forwarded. Allowlisted proxy URLs can themselves carry
+credentials: configure these only when you trust the build scripts.
+This is environment filtering, not a sandbox: builds still run as your user and
+can read local files, including tool configuration under `HOME`.
+
+Source URLs must not embed password/token userinfo. Bare usernames such as
+`https://user@host/repo.git` are allowed for credential-helper account selection,
+but known token prefixes (`ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`,
+`glpat-`) and token usernames (`oauth2`, `x-access-token`, `x-token-auth`) are
+rejected. Query strings and fragments are unsupported and rejected: source path
+derivation and generated shell commands do not handle these suffixes safely.
+Host installs refuse sources declaring `authSecret` before any materialization;
+use a credential-free URL with externally configured Git authentication instead.
+Cook never synthesizes a credentialed remote for host installs. An unrecognized
+credential embedded in a source URL by the user is still written to `.git/config`
+and the lock, so never put credentials in source URLs.
+
 ### Sidecars in host mode
 
 `cook install` supports recipes with sidecar `services` and
@@ -114,7 +148,8 @@ components and connectome-host itself — to its current commit SHA via
 `git ls-remote` at cook time. The SHA is baked into clone/checkout steps
 (and the `CH_REF` build-arg default) and recorded in `connectome.lock`,
 so rebuilding later reproduces the exact trees. Unresolvable refs (offline,
-private repos) warn and stay symbolic.
+private repos) fail before any files are written or clones/builds start. Private
+`authSecret` sources need an explicit commit SHA when pinning.
 
 ### Templates
 
@@ -130,7 +165,7 @@ private repos) warn and stay symbolic.
 --image-name <name>    Override the generated image name
 --no-prompts           Non-interactive; warn-and-continue on missing values
 --env-file <path>      Read variable values from this file before prompting
---pin-refs             Resolve branch refs to current SHAs (Phase 4 — TODO)
+--pin-refs             Resolve branch refs to current SHAs; fail if unresolved
 ```
 
 ### Anthropic credentials
@@ -204,3 +239,36 @@ For now this lives in @Tengro's namespace. Once the CLI is meaningfully battle-t
 ## License
 
 Apache 2.0. See [LICENSE](./LICENSE).
+
+## Disposable held candidates (PR01b)
+
+An opt-in `cook install --hold` prepares an empty-root, single-agent candidate
+with explicit UUID identity/lineage, a frozen version envelope, private seed
+boundary and an immutable one-way launch refusal. `cook verify` inspects it
+without launching, fetching, prompting or clearing hold. There is no production
+ingest adapter or activation path in this slice.
+
+Candidate mutations require Linux, util-linux **`/usr/bin/flock`**, an admitted
+local filesystem and a successful inherited-descriptor lock preflight. Existing
+legacy commands retain their platform support and interactive behavior.
+
+**Compatibility change:** `cook check --json` now exits **2** with
+`E_JSON_UNSUPPORTED` on stderr and **empty stdout**, before reading a recipe.
+It no longer warns and falls back to human text.
+
+See [held-candidate commands, all seven schemas, compatibility table and
+maintainer decisions](docs/held-candidates.md). Do not attach production data,
+credentials or consumers; even successful verification does not authorize launch.
+
+### File-only secret save (opt-in)
+
+For named raw secret files without fetch, build or service effects, see
+[the private-file declaration and save contract](docs/secret-files.md).
+
+### Deployment manifest export (opt-in)
+
+`cook deployment export` explicitly extends the existing version envelope with
+role/owner, profile, provider-name, unit and artifact bindings plus an optional
+config Git revision. See
+[the manifest contract and export command](docs/deployment-manifest.md).
+This declares recovery inputs; it does not back up data, install or attest running.

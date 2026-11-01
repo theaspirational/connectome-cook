@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "backend": "host",
+  "recipePath": "/srv/fixture/recipes/recipe.json",
+  "createdAt": "2026-10-30T00:00:00.000Z",
+  "connectomeHost": {
+    "url": "https://example.invalid/host",
+    "ref": "main",
+    "path": "/srv/fixture/runtime/app",
+    "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "components": [],
+  "localExtensions": [],
+  "requirements": [],
+  "launch": {
+    "kind": "script",
+    "script": "/srv/fixture/run.sh"
+  }
+}

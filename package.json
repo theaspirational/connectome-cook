@@ -16,7 +16,10 @@
   "files": [
     "bin",
     "dist",
-    "README.md"
+    "README.md",
+    "docs/held-candidates.md",
+    "docs/deployment-manifest.md",
+    "docs/secret-files.md"
   ],
   "license": "Apache-2.0",
   "engines": {

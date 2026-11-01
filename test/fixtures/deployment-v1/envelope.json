@@ -1,0 +1,19 @@
+{
+  "schema": "connectome.deployment/v1",
+  "agent": {
+    "id": "01234567-89ab-cdef-0123-456789abcdef",
+    "lineage": "abcdef01-2345-6789-abcd-ef0123456789"
+  },
+  "desired": {
+    "declaration": ".cook/declaration.json",
+    "configDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "materialized": {
+    "lock": "connectome.lock",
+    "lockVersion": 1,
+    "lockDigest": "sha256:b3f16f9a2fd55cb7d94bf391a10eca9d5f1a9663d716d3630131b29d824ff745"
+  },
+  "installed": null,
+  "running": null,
+  "lifecycle": "held-candidate"
+}

@@ -1,9 +1,13 @@
+import { candidateCommand, seedCommand, CANDIDATE_HELP } from './candidate/commands.js';
+import { guard } from './candidate/io.js';
+import { CandidateError } from './candidate/schema.js';
 import mri from 'mri';
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
+import { assertCredentialFreeSourceUrl } from './source-url.js';
 import { log } from './log.js';
 import { slugify } from './slug.js';
 import type { SubcommandHandler } from './types.js';
@@ -40,6 +44,9 @@ ${log.bold('Commands:')}
   install <recipe>       Install directly onto this machine (no docker)
   run <recipe|dir>       Launch a materialized deployment (build first if none)
   check <recipe>         Validate a recipe without writing files
+  hold <dir>             Inspect one-way candidate hold (--clear refuses)
+  seed check|complete    Inspect fresh history / bounded marker completion
+  verify <dir>          Read-only aggregate verification under hold
   init <name>            Scaffold a starter recipe
 
 ${log.bold('Global flags:')}
@@ -75,7 +82,7 @@ ${log.bold('Usage:')}
 
 ${log.bold('Flags:')}
   --strict               Fail if any MCP server lacks a \`source\` block
-  --json                 Machine-readable report (TODO)
+  --json                 Unsupported: exits 2 / E_JSON_UNSUPPORTED
   --help, -h             Show this message
 `;
 
@@ -102,6 +109,8 @@ async function runBuildPipeline(argv: string[]): Promise<BuildResult> {
     process.stdout.write(BUILD_USAGE);
     return { exitCode: 0, outDir: '' };
   }
+
+  if (flags.out) guard(resolve(flags.out));
 
   const [recipePath] = flags._ as string[];
   if (!recipePath) {
@@ -130,7 +139,7 @@ async function runBuildPipeline(argv: string[]): Promise<BuildResult> {
       pinnedChRef = chSha;
       log.info(`--pin-refs: connectome-host@${DEFAULT_CH_REF} → ${chSha.slice(0, 12)}`);
     } else {
-      log.warn(`--pin-refs: could not resolve connectome-host@${DEFAULT_CH_REF} — CH_REF left symbolic`);
+      throw new Error(`--pin-refs: could not resolve connectome-host@${DEFAULT_CH_REF}; no output written.`);
     }
   }
 
@@ -178,6 +187,7 @@ ${log.bold('Flags:')}
 `;
 
 async function handleInstall(argv: string[]): Promise<number> {
+  if (argv.some(a => a === '--hold' || a.startsWith('--hold='))) return candidateCommand('prepare', argv);
   const flags = mri(argv, {
     boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates'],
     string: ['out', 'env-file', 'ch-repo', 'ch-ref'],
@@ -185,9 +195,11 @@ async function handleInstall(argv: string[]): Promise<number> {
   });
 
   if (flags.help) {
-    process.stdout.write(INSTALL_USAGE);
+    process.stdout.write(INSTALL_USAGE + CANDIDATE_HELP);
     return 0;
   }
+
+  if (flags.out) guard(resolve(flags.out));
 
   const [recipePath] = flags._ as string[];
   if (!recipePath) {
@@ -196,15 +208,30 @@ async function handleInstall(argv: string[]): Promise<number> {
     return 1;
   }
 
+  // The default name lives inside the parent recipe, not in its filename.
+  // Read that parent once (no values, prompts or child walking), then refuse
+  // before resolving anything else. Pass it onward to avoid a second fetch.
+  let parentRecipe: Recipe | undefined;
+  if (!flags.out) {
+    log.step(`walking recipe ${log.dim(recipePath)}`);
+    try { parentRecipe = await loadRecipeRaw(recipePath); }
+    catch (err) {
+      log.error(`failed to load recipe: ${err instanceof Error ? err.message : String(err)}`);
+      return 2;
+    }
+    guard(join(homedir(), '.connectome', 'installs', slugify(parentRecipe.name)));
+  }
+
   const planResult = await resolvePlan(recipePath, {
     strict: !!flags.strict,
     noPrompts: flags.prompts === false,
     envFile: flags['env-file'],
-  });
+  }, parentRecipe);
   if (!planResult.ok) return planResult.exitCode;
 
   const chRepoUrl = flags['ch-repo'] ?? DEFAULT_CH_REPO_URL;
   const chRef = flags['ch-ref'] ?? DEFAULT_CH_REF;
+  assertCredentialFreeSourceUrl(chRepoUrl, '--ch-repo');
 
   // --pin-refs: resolve every symbolic ref (components + connectome-host)
   // to a SHA before executing; clones check out the exact commits.
@@ -217,7 +244,7 @@ async function handleInstall(argv: string[]): Promise<number> {
       chCommit = chSha;
       log.info(`--pin-refs: connectome-host@${chRef} → ${chSha.slice(0, 12)}`);
     } else {
-      log.warn(`--pin-refs: could not resolve connectome-host@${chRef} — left unpinned`);
+      throw new Error(`--pin-refs: could not resolve connectome-host@${chRef}; no output written.`);
     }
   }
 
@@ -271,6 +298,7 @@ Build flags are the same as ${log.bold('cook build')}.  Anything after \`--\` go
  *  or copies the output dir, and launching a different deployment than the
  *  one explicitly named would be silently wrong. */
 function launchFromLock(dir: string, passthroughArgs: string[]): Promise<number> {
+  guard(dir);
   let lock;
   try {
     lock = readLockfile(dir);
@@ -327,6 +355,7 @@ async function findMaterialization(
     // Unloadable recipe — the build path will surface the real error.
   }
   for (const dir of candidates) {
+    guard(dir);
     if (existsSync(join(dir, LOCKFILE_NAME))) return dir;
   }
   return null;
@@ -355,6 +384,11 @@ async function handleRun(argv: string[]): Promise<number> {
   });
   const [target] = runFlags._ as string[];
 
+  if (runFlags.out) guard(resolve(runFlags.out));
+  if (target) guard(resolve(target));
+  // Even rebuild/fresh routes must inspect the selected recipe target first.
+  const selected = target ? await findMaterialization(target, runFlags.out) : null;
+
   // Build-affecting flags mean the operator wants a fresh materialization —
   // launching a stale dir while silently ignoring them would be wrong.
   const wantsFreshBuild = runFlags.rebuild
@@ -372,7 +406,7 @@ async function handleRun(argv: string[]): Promise<number> {
 
   // 2. Recipe with an existing materialization — launch without re-resolving.
   if (target && !wantsFreshBuild) {
-    const found = await findMaterialization(target, runFlags.out);
+    const found = selected;
     if (found) {
       log.info(`found existing materialization ${log.dim(found)} (use --rebuild to re-cook)`);
       return launchFromLock(found, passthroughArgs);
@@ -411,15 +445,16 @@ async function handleCheck(argv: string[]): Promise<number> {
     return 0;
   }
 
+  if (flags.json) {
+    process.stderr.write('E_JSON_UNSUPPORTED: check --json is not implemented; use verify for installed findings.\n');
+    return 2;
+  }
+
   const [recipePath] = flags._ as string[];
   if (!recipePath) {
     log.error('check: missing recipe path');
     process.stderr.write(`\n${CHECK_USAGE}`);
     return 1;
-  }
-
-  if (flags.json) {
-    log.warn('--json: not yet implemented; printing human-readable report');
   }
 
   let walks;
@@ -558,6 +593,11 @@ const SUBCOMMANDS: Record<string, SubcommandHandler> = {
   run: handleRun,
   check: handleCheck,
   init: handleInit,
+  hold: args => candidateCommand('hold', args),
+  seed: seedCommand,
+  verify: args => candidateCommand('verify', args),
+  secret: args => import('./secret-save.js').then(m => m.secretCommand(args)),
+  deployment: args => import('./candidate/manifest.js').then(m => m.deploymentCommand(args)),
 };
 
 export async function main(argv: string[]): Promise<void> {
@@ -585,6 +625,9 @@ export async function main(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const exitCode = await handler(argv.slice(1));
-  process.exit(exitCode);
+  try { process.exit(await handler(argv.slice(1))); }
+  catch (error) {
+    if (error instanceof CandidateError) { process.stderr.write(`${error.code}: candidate operation refused.\n`); process.exit(error.exitCode); }
+    throw error;
+  }
 }
