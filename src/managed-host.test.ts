@@ -65,5 +65,8 @@ test('invalid versions, ranges, permissions and missing engines fail closed', ()
 test('held launcher remains an immutable refusal with selected engines', () => {
   const launcher = join(dir, 'held.sh');
   writeFileSync(launcher, renderLauncher('recipe.json', { hasSidecars: false, envsubstFiles: [], candidate: true, engines: { bun: { path: bun, version: '1.4.4' }, node: { path: node, version: '22.23.3' } } }));
-  expect(spawnSync('/bin/bash', [launcher]).status).toBe(4);
+  const result = spawnSync('/bin/bash', [launcher], { encoding: 'utf8' });
+  expect(result.stderr).toContain('E_HELD: disposable candidate is held; activation is not supported.');
+  expect(result.stderr).not.toContain('PR01b');
+  expect(result.status).toBe(4);
 });
