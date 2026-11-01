@@ -70,3 +70,27 @@ test('held launcher remains an immutable refusal with selected engines', () => {
   expect(result.stderr).not.toContain('PR01b');
   expect(result.status).toBe(4);
 });
+
+test('CLI exports a headless private journal user unit without service calls', () => {
+  const result = install(['--bun-path', bun, '--node-path', node, '--user-unit', 'example.service']);
+  expect(result.status).toBe(0);
+  const unit = readFileSync(join(out, 'example.service'), 'utf8');
+  expect(unit).toContain('ExecStart=/bin/bash "' + join(out, 'run.sh') + '" --headless');
+  expect(unit).toContain('WorkingDirectory="' + out + '"');
+  for (const required of ['Restart=on-failure', 'UMask=0077', 'StandardOutput=journal', 'StandardError=journal']) expect(unit).toContain(required);
+  const lock = JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf8'));
+  expect(lock.launch.userUnit).toBe(join(out, 'example.service'));
+});
+test('unit export refuses unsafe names and missing selected engines without materializing', () => {
+  expect(install(['--user-unit', 'example.service']).status).not.toBe(0);
+  for (const name of ['../bad.service', 'bad\n.service', 'bad@.service', 'run.sh', '']) {
+    expect(install(['--bun-path', bun, '--node-path', node, '--user-unit', name]).status).not.toBe(0);
+    expect(existsSync(out)).toBe(false);
+  }
+});
+
+test('held preparation rejects user-unit export before reserving output', () => {
+  const result = install(['--hold', '--user-unit', 'example.service']);
+  expect(result.status).not.toBe(0);
+  expect(existsSync(out)).toBe(false);
+});

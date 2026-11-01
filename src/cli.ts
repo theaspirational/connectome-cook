@@ -182,6 +182,7 @@ ${log.bold('Flags:')}
                          references render as empty (default: refuse)
   --env-file <path>      Read variable values from this file before prompting
   --ch-repo <url>        connectome-host repo (default: ${DEFAULT_CH_REPO_URL})
+  --user-unit <name.service> Export a user unit only (requires selected engines)
   --bun-path <absolute>  Validate host engines (requires --node-path)
   --node-path <absolute> Select Node for host stdio consumers
   --ch-ref <ref>         connectome-host ref (default: ${DEFAULT_CH_REF})
@@ -192,7 +193,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   if (argv.some(a => a === '--hold' || a.startsWith('--hold='))) return candidateCommand('prepare', argv);
   const flags = mri(argv, {
     boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates'],
-    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path'],
+    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit'],
     alias: { h: 'help' },
   });
 
@@ -256,6 +257,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   );
   const result = await runHostBackend(planResult.plan, {
     installDir,
+    userUnit: flags['user-unit'],
     bunPath: flags['bun-path'],
     nodePath: flags['node-path'],
     noPrompts: flags.prompts === false,

@@ -61,6 +61,7 @@ import {
   type Lockfile,
   type LockedComponent,
 } from '../lockfile.js';
+import { renderUserUnit, validateUserUnit } from '../host-unit.js';
 import { hostBuildPath, preflightHostEngines, type HostEngines } from '../host-engines.js';
 import type { BuildResult } from './docker.js';
 
@@ -68,6 +69,8 @@ export interface HostBackendOptions {
   /** Internal held-candidate preparation; CLI cannot bypass the hold guard. */
   candidate?: boolean;
   /** Both absolute paths opt into fail-closed host engine validation. */
+  /** Export a static user unit under the installation; never install/start it. */
+  userUnit?: string;
   bunPath?: string;
   /** Absolute Node path, required together with bunPath. */
   nodePath?: string;
@@ -483,6 +486,12 @@ export async function runHostBackend(
       );
     }
   }
+  let userUnit: string | undefined;
+  if (options.userUnit !== undefined) {
+    if (options.candidate || !options.bunPath || !options.nodePath) throw new Error('E_HOST_UNIT: legacy selected engines required');
+    validateUserUnit(options.userUnit);
+    userUnit = renderUserUnit(installDir);
+  }
   let engines: HostEngines | undefined;
   if (options.bunPath !== undefined || options.nodePath !== undefined) {
     if (options.candidate || !options.bunPath || !options.nodePath) throw new Error('E_HOST_ENGINE: both paths are required for legacy installs');
@@ -768,6 +777,8 @@ export async function runHostBackend(
       { mode: options.candidate ? 0o700 : 0o755 },
     );
 
+    if (userUnit !== undefined) writeOutput(join(installDir, options.userUnit!), userUnit, { mode: 0o600 });
+
     const lock: Lockfile = {
       version: 1,
       backend: 'host',
@@ -792,7 +803,7 @@ export async function runHostBackend(
         origin: r.origin,
         ...(r.value !== undefined ? { value: r.value } : {}),
       })),
-      launch: { kind: 'script', script: join(installDir, 'run.sh') },
+      launch: { kind: 'script', script: join(installDir, 'run.sh'), ...(userUnit !== undefined ? { userUnit: join(installDir, options.userUnit!) } : {}) },
     };
     if (options.candidate) { syncTree(installDir); publish(join(installDir, LOCKFILE_NAME), JSON.stringify(lock, null, 2) + '\n'); }
     else writeLockfile(installDir, lock);

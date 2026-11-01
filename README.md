@@ -274,3 +274,5 @@ config Git revision. See
 This declares recovery inputs; it does not back up data, install or attest running.
 
 Host installs: [operator-selected engine preflight](docs/host-engines.md).
+
+Host installs: [static systemd user-unit export](docs/host-user-unit.md).
