@@ -4,12 +4,20 @@ import { readFileSync } from 'node:fs';
 import type { Lockfile } from '../lockfile.js';
 import { assertCredentialFreeSourceUrl } from '../source-url.js';
 import { validateLock } from './lockfile.js';
-import { CandidateError, canonical, deploymentRevision, fail, hash, parseJSON, validate, type Envelope, type Manifest, type RunningObservation } from './schema.js';
+import { CandidateError, canonical, fail, hash, parseJSON, validate, type Envelope, type Manifest } from './schema.js';
+
+/** Declared code/config/bindings only, including an optional config revision. */
+export function deploymentRevision(e: Envelope): string {
+  if (!e.manifest) return fail('E_SCHEMA');
+  const { revision: _revision, ...bindings } = e.manifest;
+  return hash(canonical({ agent: e.agent, desired: e.desired, materialized: e.materialized, bindings }));
+}
 
 /** Adapt either envelope shape to the unchanged host materialization v1 reader.
  * Legacy records remain legacy; no missing deployment bindings are invented. */
 export function materializationV1(value: unknown, lockBytes: string): Lockfile {
   const e = validate('connectome.deployment/v1', value);
+  if (e.manifest && e.manifest.revision !== deploymentRevision(e)) fail('E_DIGEST');
   if (hash(lockBytes) !== e.materialized.lockDigest) fail('E_DIGEST');
   const lock = validateLock(parseJSON(lockBytes));
   if (e.manifest) {
@@ -32,6 +40,7 @@ export function materializationV1(value: unknown, lockBytes: string): Lockfile {
  * No config, credential or mutable-state bytes are read or hashed here. */
 export function extendEnvelope(value: unknown, lockBytes: string, bindings: Omit<Manifest, 'revision'>): Envelope {
   const legacy = validate('connectome.deployment/v1', value);
+  if (legacy.manifest) fail('E_SCHEMA');
   if (!bindings || Object.hasOwn(bindings, 'revision')) fail('E_SCHEMA');
   const e: Envelope = { ...legacy, manifest: { ...bindings, revision: '' } };
   e.manifest!.revision = deploymentRevision(e);
@@ -45,18 +54,6 @@ export function exportManifest(value: unknown, lockBytes: string): string {
   if (!e.manifest) fail('E_PROOF_INCOMPLETE');
   materializationV1(e, lockBytes);
   return canonical(e) + '\n';
-}
-
-/** An external observer must supply completed-transaction evidence, exact unit
- * tuple and revision. This reader is not an attestation producer/authority. */
-export function readObservation(value: unknown, envelope: unknown): RunningObservation {
-  const e = validate('connectome.deployment/v1', envelope);
-  const o = validate('connectome.observed-running/v1', value);
-  if (!e.manifest) fail('E_PROOF_INCOMPLETE');
-  if (canonical(e.agent) !== canonical(o.agent)) fail('E_IDENTITY');
-  if (e.manifest.revision !== o.revision) fail('E_DIGEST');
-  if (canonical(e.manifest.units.map(u => u.name).sort()) !== canonical([...o.units].sort())) fail('E_PROOF_INCOMPLETE');
-  return o;
 }
 
 export async function deploymentCommand(args: string[]): Promise<number> {
