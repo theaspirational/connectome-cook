@@ -22,7 +22,8 @@
     "docs/secret-files.md",
     "docs/host-engines.md",
     "docs/host-user-unit.md",
-    "docs/host-layout.md"
+    "docs/host-layout.md",
+    "docs/host-credentials.md"
   ],
   "license": "Apache-2.0",
   "engines": {

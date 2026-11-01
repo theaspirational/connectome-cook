@@ -162,3 +162,53 @@ test('split layout refuses missing engines, unknown state consumers, legacy temp
   expect(install(['--layout', path, '--bun-path', bun, '--node-path', node]).status).not.toBe(0);
   expect(existsSync(out)).toBe(false);
 });
+
+test('installed named credential adapter launches only a fake consumer; artifacts contain no file values', () => {
+  node = Bun.which('node')!;
+  const c = splitLayout();
+  const bindings = { schema: 'connectome.credential-bindings/v1', root: c.credentials, files: { token: 'token' }, consumers: { local: { API_TOKEN: 'token' } } };
+  const path = join(dir, 'bindings.json'); writeFileSync(path, JSON.stringify(bindings));
+  mkdirSync(c.credentials, { mode: 0o700 });
+  const synthetic = 'synthetic-file-value-not-for-artifacts';
+  writeFileSync(join(c.credentials, 'token'), synthetic, { mode: 0o600 });
+  writeFileSync(join(dir, 'local/fixture.js'), 'process.stdout.write(JSON.stringify({ value: process.env.API_TOKEN, args: process.argv.slice(2) }));');
+  const args = ['--bun-path', bun, '--node-path', node, '--layout', layoutFile(), '--credential-bindings', path];
+  const result = install(args);
+  if (result.status) console.error(result.stdout, result.stderr);
+  expect(result.status).toBe(0);
+  const config = JSON.parse(readFileSync(join(c.config, 'recipes/recipe.json'), 'utf8'));
+  const server = config.mcpServers.local;
+  expect(server.command).toBe(node);
+  expect(server.env.SETTINGS).toBe(join(c.state, 'connectors/local/settings/config.json'));
+  const launched = spawnSync(server.command, server.args, { encoding: 'utf8', env: { PATH: process.env.PATH } });
+  expect(launched.status).toBe(0);
+  expect(JSON.parse(launched.stdout)).toEqual({ value: synthetic, args: [] });
+  for (const file of [join(c.config, 'recipes/recipe.json'), join(out, 'connectome.lock'), join(out, 'run.sh'), ...server.args]) expect(readFileSync(file, 'utf8')).not.toContain(synthetic);
+  expect(install(args).status).toBe(0);
+});
+test('credential integration refuses missing engines, held preparation, unknown consumers, conflicting roots and env', () => {
+  const bindings = { schema: 'connectome.credential-bindings/v1', root: join(dir, 'credentials'), files: { token: 'token' }, consumers: { local: { API_TOKEN: 'token' } } };
+  const path = join(dir, 'bindings.json');
+  writeFileSync(path, JSON.stringify(bindings));
+  expect(install(['--credential-bindings', path]).status).not.toBe(0);
+  expect(install(['--credential-bindings', path, '--hold']).status).not.toBe(0);
+  for (const patch of [
+    { root: out }, { root: join(out, 'credentials') },
+    { consumers: { missing: { API_TOKEN: 'token' } } },
+    { consumers: { local: { SETTINGS: 'token' } } },
+  ]) {
+    writeFileSync(path, JSON.stringify({ ...bindings, ...patch }));
+    expect(install(['--bun-path', bun, '--node-path', node, '--layout', layoutFile(), '--credential-bindings', path]).status).not.toBe(0);
+    expect(existsSync(out)).toBe(false);
+  }
+});
+
+test('credential declaration parse failures redact accidentally supplied content', () => {
+  const path = join(dir, 'bindings.json');
+  const sentinel = 'synthetic-accidental-secret-in-invalid-json';
+  writeFileSync(path, '{ "root": "' + sentinel + '" broken json }');
+  const result = install(['--bun-path', bun, '--node-path', node, '--credential-bindings', path]);
+  expect(result.status).not.toBe(0);
+  expect(result.stderr + result.stdout).not.toContain(sentinel);
+  expect(existsSync(out)).toBe(false);
+});
