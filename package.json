@@ -21,7 +21,8 @@
     "docs/deployment-manifest.md",
     "docs/secret-files.md",
     "docs/host-engines.md",
-    "docs/host-user-unit.md"
+    "docs/host-user-unit.md",
+    "docs/host-layout.md"
   ],
   "license": "Apache-2.0",
   "engines": {

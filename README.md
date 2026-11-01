@@ -276,3 +276,5 @@ This declares recovery inputs; it does not back up data, install or attest runni
 Host installs: [operator-selected engine preflight](docs/host-engines.md).
 
 Host installs: [static systemd user-unit export](docs/host-user-unit.md).
+
+Host installs: [opt-in split layout and manual handoff](docs/host-layout.md).

@@ -10,14 +10,14 @@ function unitQuote(value: string, exec = false): string {
   // Unit specifiers expand even in quoted strings.
   return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%') + '"';
 }
-export function renderUserUnit(installDir: string): string {
+export function renderUserUnit(installDir: string, workingDirectory = installDir): string {
   return [
     '[Unit]',
     'Description=Connectome host',
     '',
     '[Service]',
     'Type=simple',
-    'WorkingDirectory=' + unitQuote(installDir),
+    'WorkingDirectory=' + unitQuote(workingDirectory),
     'ExecStart=/bin/bash ' + unitQuote(join(installDir, 'run.sh'), true) + ' --headless',
     'Restart=on-failure',
     'RestartSec=5s',
