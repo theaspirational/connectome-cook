@@ -111,6 +111,7 @@ const rules: Record<keyof Records, Rule> = {
   'connectome.seed-consumed/v1': closed({ schema: one('connectome.seed-consumed/v1'), ...common, consumedAt: time, ingestResultDigest: digest, storeIdentity: text, qualificationId: text, outcome }),
   'connectome.findings/v1': closed({ schema: one('connectome.findings/v1'), supported: v => Array.isArray(v) && v.length > 0 && v.every(s => typeof s === 'string') && new Set(v).size === v.length && v.includes('connectome.findings/v1'), command: one('prepare', 'hold', 'hold-clear', 'seed-check', 'seed-complete', 'verify'), status: one('ok', 'warning', 'error'), held: one(true, false, null), activationAllowed: one(false), findings: v => Array.isArray(v) && v.every(finding) }),
 };
+// Revision integrity is checked by materializationV1, not by bare validate().
 export function validate<K extends keyof Records>(schema: K, value: unknown): Records[K] {
   if (!Object.hasOwn(rules, schema) || !rules[schema](value)) fail('E_SCHEMA');
   if (schema === 'connectome.deployment/v1' && (value as Envelope).manifest) validateManifest((value as Envelope).manifest!);
