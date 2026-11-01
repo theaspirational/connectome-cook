@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { chmodSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync, fsyncSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { privateWrite } from './private-write.js';
+import { privateWrite, privateWriteForTest } from './private-write.js';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'cook-private-')); });
@@ -61,7 +61,7 @@ test('refuses symlink, directory and hardlinked targets even with tightening', (
 
 test('refuses wrong existing owner using injected stat', () => {
   oldFile();
-  expect(() => privateWrite(root, 'token', 'new', { allowTightening: true, test: { stat: path => {
+  expect(() => privateWriteForTest(root, 'token', 'new', { allowTightening: true, test: { stat: path => {
     const s = lstatSync(path);
     if (path.endsWith('/token')) s.uid = (process.geteuid?.() ?? 0) + 1;
     return s;
@@ -97,7 +97,7 @@ test('requires existing private parent directories, never creates them', () => {
 for (const point of ['created', 'written', 'file-synced'] as const) {
   test(`failure at ${point} preserves old bytes and removes only its temp`, () => {
     oldFile(); writeFileSync(join(root, '.cook-private-other'), 'unrelated');
-    expect(() => privateWrite(root, 'token', 'new', { test: { point: p => { if (p === point) throw new Error('injected'); } } })).toThrow('E_PRIVATE_IO');
+    expect(() => privateWriteForTest(root, 'token', 'new', { test: { point: p => { if (p === point) throw new Error('injected'); } } })).toThrow('E_PRIVATE_IO');
     expect(readFileSync(join(root, 'token'), 'utf8')).toBe('old');
     expect(readdirSync(root).sort()).toEqual(['.cook-private-other', 'token']);
   });
@@ -105,7 +105,7 @@ for (const point of ['created', 'written', 'file-synced'] as const) {
 
 test('partial write failure leaves old file and no temp', () => {
   oldFile(); let calls = 0;
-  expect(() => privateWrite(root, 'token', 'new value', { test: { write: (fd, bytes, offset) => {
+  expect(() => privateWriteForTest(root, 'token', 'new value', { test: { write: (fd, bytes, offset) => {
     if (calls++) throw new Error('interrupted');
     return writeSync(fd, bytes, offset, 2);
   } } })).toThrow(); intact();
@@ -113,7 +113,7 @@ test('partial write failure leaves old file and no temp', () => {
 
 test('loops on short writes; syncs the file before rename and directory after', () => {
   oldFile(); const seen: string[] = [];
-  const result = privateWrite(root, 'token', 'new value', { test: {
+  const result = privateWriteForTest(root, 'token', 'new value', { test: {
     write: (fd, bytes, offset, length) => writeSync(fd, bytes, offset, Math.min(length, 2)),
     sync: fd => { seen.push(readFileSync(join(root, 'token'), 'utf8')); fsyncSync(fd); },
   } });
@@ -122,12 +122,12 @@ test('loops on short writes; syncs the file before rename and directory after', 
 
 test('file fsync failure is pre-commit and preserves old content', () => {
   oldFile();
-  expect(() => privateWrite(root, 'token', 'new', { test: { sync: () => { throw new Error('sync failed'); } } })).toThrow(); intact();
+  expect(() => privateWriteForTest(root, 'token', 'new', { test: { sync: () => { throw new Error('sync failed'); } } })).toThrow(); intact();
 });
 
 test('post-rename directory sync failure reports committed, uncertain durability', () => {
   oldFile(); let calls = 0;
-  expect(privateWrite(root, 'token', 'new', { test: { sync: fd => {
+  expect(privateWriteForTest(root, 'token', 'new', { test: { sync: fd => {
     if (calls++) throw new Error('sync failed'); fsyncSync(fd);
   } } })).toEqual({ durability: 'uncertain' });
   expect(readFileSync(join(root, 'token'), 'utf8')).toBe('new');
@@ -136,7 +136,7 @@ test('post-rename directory sync failure reports committed, uncertain durability
 
 test('rechecks the target before committing so concurrent replacement is preserved', () => {
   oldFile();
-  expect(() => privateWrite(root, 'token', 'new', { test: { point: p => {
+  expect(() => privateWriteForTest(root, 'token', 'new', { test: { point: p => {
     if (p === 'written') {
       writeFileSync(join(root, 'other'), 'external', { mode: 0o600 });
       renameSync(join(root, 'other'), join(root, 'token'));
@@ -149,7 +149,7 @@ test('rechecks the target before committing so concurrent replacement is preserv
 test('directory descriptors prevent a replaced ancestor from redirecting writes', () => {
   mkdirSync(join(root, 'parent'), { mode: 0o700 });
   mkdirSync(join(root, 'outside'), { mode: 0o700 });
-  privateWrite(root, 'parent/token', 'new', { test: { point: p => {
+  privateWriteForTest(root, 'parent/token', 'new', { test: { point: p => {
     if (p === 'written') {
       renameSync(join(root, 'parent'), join(root, 'original'));
       symlinkSync('outside', join(root, 'parent'));
@@ -157,4 +157,13 @@ test('directory descriptors prevent a replaced ancestor from redirecting writes'
   } } });
   expect(readdirSync(join(root, 'outside'))).toEqual([]);
   expect(readFileSync(join(root, 'original/token'), 'utf8')).toBe('new');
+});
+
+test('public writer ignores fault hooks even if supplied by an untyped caller', () => {
+  oldFile(); let called = false;
+  const options = { test: { point: () => { called = true; throw new Error('must not run'); } } };
+  // @ts-expect-error Fault hooks are not part of the public options type.
+  privateWrite(root, 'token', 'new', { test: options.test });
+  expect(called).toBe(false);
+  expect(readFileSync(join(root, 'token'), 'utf8')).toBe('new');
 });

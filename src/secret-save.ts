@@ -1,7 +1,7 @@
 /** Opt-in raw secret-file destinations, separate from generated deployment
  * config and program-refreshed credentials. Values never enter a declaration. */
 import { readFileSync } from 'node:fs';
-import { privatePathParts, privateWrite, type PrivateWriteOptions, type PrivateWriteResult } from './private-write.js';
+import { PrivateWriteError, privatePathParts, privateWrite, type PrivateWriteOptions, type PrivateWriteResult } from './private-write.js';
 
 export interface SecretFiles {
   schema: 'connectome.secret-files/v1';
@@ -15,7 +15,11 @@ export interface SecretSaveResult extends PrivateWriteResult {
   adoptionRequired: 'restart-or-reload';
 }
 export class SecretSaveError extends Error {
-  constructor() { super('E_SECRET_SAVE'); }
+  constructor(public readonly code?: PrivateWriteError['code']) { super('E_SECRET_SAVE'); }
+}
+function saveError(error: unknown): SecretSaveError {
+  if (error instanceof SecretSaveError) return error;
+  return new SecretSaveError(error instanceof PrivateWriteError ? error.code : undefined);
 }
 /** Validate even for API callers; never echo untrusted input on refusal. */
 export function secretFiles(value: unknown): SecretFiles {
@@ -33,7 +37,7 @@ export function secretFiles(value: unknown): SecretFiles {
       paths.push(path);
     }
     return c;
-  } catch { throw new SecretSaveError(); }
+  } catch (error) { throw saveError(error); }
 }
 
 /** File only: no recipe loading, providers, fetches, builds or service calls.
@@ -46,12 +50,13 @@ export function saveSecret(config: SecretFiles, name: string, value: string | Ui
     if (!size || size > 65536) throw new SecretSaveError();
     const result = privateWrite(c.root, c.files[name]!, value, options);
     return { saved: true, adoptionRequired: 'restart-or-reload', ...result };
-  } catch { throw new SecretSaveError(); }
+  } catch (error) { throw saveError(error); }
 }
 
 const USAGE = 'cook secret save --config <local-json> --name <destination> [--allow-tightening] < value\nSaves exact stdin bytes only; an explicit restart or reload is needed for adoption.\n';
 /** Strict parsing: no value argv/env option and no remote config resolution. */
 export async function secretCommand(argv: string[]): Promise<number> {
+  if (!argv.length) { process.stdout.write(USAGE); return 2; }
   if (argv.length === 1 && (argv[0] === '--help' || argv[0] === '-h')) { process.stdout.write(USAGE); return 0; }
   try {
     if (argv[0] !== 'save') throw new SecretSaveError();
@@ -75,5 +80,9 @@ export async function secretCommand(argv: string[]): Promise<number> {
     const result = saveSecret(config, name, Buffer.concat(chunks), { allowTightening });
     process.stdout.write(`${JSON.stringify(result)}\n`);
     return result.durability === 'synced' ? 0 : 3;
-  } catch { process.stderr.write('E_SECRET_SAVE: secret save refused.\n'); return 2; }
+  } catch (error) {
+    const code = saveError(error).code;
+    process.stderr.write(`E_SECRET_SAVE${code ? ` (${code})` : ''}: secret save refused.\n`);
+    return 2;
+  }
 }
