@@ -61,6 +61,8 @@ import {
   type Lockfile,
   type LockedComponent,
 } from '../lockfile.js';
+import { applyConnectorState, hostLayout, provisionLayout, validateLayoutConsumers, type HostLayout } from '../host-layout.js';
+import { privateWrite } from '../private-write.js';
 import { renderUserUnit, validateUserUnit } from '../host-unit.js';
 import { hostBuildPath, preflightHostEngines, type HostEngines } from '../host-engines.js';
 import type { BuildResult } from './docker.js';
@@ -70,6 +72,7 @@ export interface HostBackendOptions {
   candidate?: boolean;
   /** Export a static user unit under the installation; never install/start it. */
   userUnit?: string;
+  layout?: HostLayout;
   /** Both absolute paths opt into fail-closed host engine validation. */
   bunPath?: string;
   /** Absolute Node path, required together with bunPath. */
@@ -397,7 +400,7 @@ export interface LauncherEnvsubst {
 
 export function renderLauncher(
   parentRecipeBasename: string,
-  opts: { hasSidecars: boolean; envsubstFiles: LauncherEnvsubst[]; candidate?: boolean; engines?: HostEngines },
+  opts: { hasSidecars: boolean; envsubstFiles: LauncherEnvsubst[]; candidate?: boolean; engines?: HostEngines; layout?: HostLayout },
 ): string {
   if (opts.candidate) return [
     '#!/usr/bin/env bash', '# connectome.candidate-launcher/v1 — one-way hold',
@@ -413,8 +416,8 @@ export function renderLauncher(
     'if [ -e ./.cook/hold.json ] || [ -L ./.cook/hold.json ] || [ -e ./.cook ] || [ -L ./.cook ] || [ -e ./connectome.deployment.json ] || [ -L ./connectome.deployment.json ]; then',
     '  echo "E_HELD: candidate metadata refuses launch." >&2; exit 4',
     'fi',
-    'if [ -f ./.env ]; then',
-    '  set -a; . ./.env; set +a',
+    'if [ -f ' + (opts.layout ? shellQuote(join(opts.layout.config, '.env')) : './.env') + ' ]; then',
+    '  set -a; . ' + (opts.layout ? shellQuote(join(opts.layout.config, '.env')) : './.env') + '; set +a',
     'fi',
   ];
   if (opts.hasSidecars) {
@@ -446,14 +449,25 @@ export function renderLauncher(
       lines.push(`chmod ${f.mode} "${f.target}"`);
     }
   }
-  lines.push(
-    '',
-    'export DATA_DIR="${DATA_DIR:-$PWD/data}"',
-    'mkdir -p "$DATA_DIR"',
-    'cd app',
-    `exec ${opts.engines ? shellQuote(opts.engines.bun.path) : "bun"} src/index.ts "../recipes/${parentRecipeBasename}" "$@"`,
-    '',
-  );
+  if (opts.layout) {
+    lines.push(
+      'umask 077',
+      'export DATA_DIR=' + shellQuote(opts.layout.state),
+      'export WORKSPACE_DIR=' + shellQuote(opts.layout.workspace),
+      'cd ' + shellQuote(opts.layout.workspace),
+      'exec ' + shellQuote(opts.engines!.bun.path) + ' ' + shellQuote(join(opts.layout.runtime, 'app/src/index.ts')) + ' ' + shellQuote(join(opts.layout.config, 'recipes', parentRecipeBasename)) + ' "$@"',
+      '',
+    );
+  } else {
+    lines.push(
+      '',
+      'export DATA_DIR="${DATA_DIR:-$PWD/data}"',
+      'mkdir -p "$DATA_DIR"',
+      'cd app',
+      `exec ${opts.engines ? shellQuote(opts.engines.bun.path) : "bun"} src/index.ts "../recipes/${parentRecipeBasename}" "$@"`,
+      '',
+    );
+  }
   return lines.join('\n');
 }
 
@@ -464,7 +478,25 @@ export async function runHostBackend(
 ): Promise<BuildResult> {
   const installDir = options.installDir;
   if (!options.candidate) guard(installDir);
+  const layout = options.layout === undefined ? undefined : hostLayout(options.layout, installDir);
+  if (layout) {
+    if (options.candidate || !options.bunPath || !options.nodePath) throw new Error('E_HOST_LAYOUT: selected engines and legacy install required');
+    if (plan.credentialFiles.length || (plan.parentWalk.recipe.services ?? []).length || plan.walks.some(w => (w.recipe.containerTemplateFiles ?? []).length)) throw new Error('E_HOST_LAYOUT: sidecars, legacy credential files and templates require the default layout');
+    if (Object.hasOwn(plan.values, 'DATA_DIR') || Object.hasOwn(plan.values, 'WORKSPACE_DIR')) throw new Error('E_HOST_LAYOUT: layout owns runtime roots');
+    validateLayoutConsumers(layout, plan.walks.map(w => w.recipe));
+  }
+  const configDir = layout?.config ?? installDir;
   const writeOutput = (path: string, content: string, opts?: { mode: number }) => {
+    if (layout) {
+      const root = path.startsWith(configDir + '/') ? configDir : installDir;
+      const result = privateWrite(root, relative(root, path), content, { allowTightening: true });
+      if (result.durability !== 'synced') throw new Error('E_PRIVATE_IO');
+      if (opts?.mode === 0o700) {
+        const fd = openSync(path, fsConstants.O_RDWR | fsConstants.O_NOFOLLOW);
+        try { fchmodSync(fd, 0o700); fsyncSync(fd); } finally { closeSync(fd); }
+      }
+      return;
+    }
     if (!options.candidate) { writeFileSync(path, content, opts); return; }
     noLinks(dirname(path));
     // Generated files are private, except the 0700 immutable refusal launcher.
@@ -490,7 +522,7 @@ export async function runHostBackend(
   if (options.userUnit !== undefined) {
     if (options.candidate || !options.bunPath || !options.nodePath) throw new Error('E_HOST_UNIT: legacy selected engines required');
     validateUserUnit(options.userUnit);
-    userUnit = renderUserUnit(installDir);
+    userUnit = renderUserUnit(installDir, layout?.workspace);
   }
   let engines: HostEngines | undefined;
   if (options.bunPath !== undefined || options.nodePath !== undefined) {
@@ -513,11 +545,16 @@ export async function runHostBackend(
   // real file), runtime-rendered ones as `.tmpl` for run.sh's envsubst.
   const valueBag = buildValueBag(plan);
   const runtimeFiles = renderRuntimeFiles(plan, valueBag);
+  if (layout && runtimeFiles.length) throw new Error('E_HOST_LAYOUT: templates require the default layout');
   if (!enforceCompleteTemplates(runtimeFiles, options.allowIncompleteTemplates)) {
     return { exitCode: 2, outDir: installDir };
   }
 
   const actions = planHostActions(plan, options);
+  if (layout) for (const target of [...actions.clones.map(a => a.target), ...actions.copies.map(a => a.target)]) {
+    const rel = relative(installDir, target);
+    if (!rel || rel.startsWith('..') || /^(?:run\.sh|connectome\.lock|\.cook)(?:\/|$)/.test(rel)) throw new Error('E_HOST_LAYOUT: code target escapes runtime root');
+  }
   if (engines) actions.clones[0]!.buildCommand = shellQuote(engines.bun.path) + ' install';
   if (options.candidate) {
     // Never allow a recipe write to collide with controls or history. Builds
@@ -542,6 +579,7 @@ export async function runHostBackend(
     log.warn(`existing ${LOCKFILE_NAME} unreadable (${err instanceof Error ? err.message : String(err)}) — treating as fresh install`);
   }
 
+  if (existingLock && JSON.stringify(existingLock.layout) !== JSON.stringify(layout)) throw new Error('E_HOST_LAYOUT: layout changes require a fresh stopped installation');
   if (engines && JSON.stringify(existingLock?.engines) !== JSON.stringify(engines)) existingLock = null;
 
   // ---- Confirm gate: commands run on the operator's machine. ----
@@ -564,8 +602,11 @@ export async function runHostBackend(
     }
   }
 
-  mkdirSync(installDir, { recursive: true });
-  mkdirSync(join(installDir, 'recipes'), { recursive: true });
+  if (layout) provisionLayout(layout);
+  else {
+    mkdirSync(installDir, { recursive: true });
+    mkdirSync(join(installDir, 'recipes'), { recursive: true });
+  }
 
   // ---- Clone + build components (idempotent against the lock). ----
   const lockedComponents: LockedComponent[] = [];
@@ -667,12 +708,13 @@ export async function runHostBackend(
   try {
     for (const walk of plan.walks) {
       const configuration = lowerToConfiguration(walk.recipe, overlays.get(walk.path), walk.path);
+      if (layout) applyConnectorState(configuration, layout);
       if (engines) for (const server of Object.values(configuration.mcpServers ?? {})) {
         if (server.command === 'node') server.command = engines.node.path;
         if (server.command === 'bun') server.command = engines.bun.path;
       }
       writeOutput(
-        join(installDir, 'recipes', recipeFilename(walk.path)),
+        join(configDir, 'recipes', recipeFilename(walk.path)),
         JSON.stringify(configuration, null, 2) + '\n',
       );
     }
@@ -769,12 +811,12 @@ export async function runHostBackend(
     }
 
     if (Object.keys(plan.values).length > 0) {
-      writeOutput(join(installDir, '.env'), renderShellEnvFile(plan.values), { mode: 0o600 });
+      writeOutput(join(configDir, '.env'), renderShellEnvFile(plan.values), { mode: 0o600 });
     }
     writeOutput(
       join(installDir, 'run.sh'),
-      renderLauncher(parentRecipeBasename, { hasSidecars, envsubstFiles, candidate: options.candidate, engines }),
-      { mode: options.candidate ? 0o700 : 0o755 },
+      renderLauncher(parentRecipeBasename, { hasSidecars, envsubstFiles, candidate: options.candidate, engines, layout }),
+      { mode: options.candidate || layout ? 0o700 : 0o755 },
     );
 
     if (userUnit !== undefined) writeOutput(join(installDir, options.userUnit!), userUnit, { mode: 0o600 });
@@ -783,6 +825,7 @@ export async function runHostBackend(
       version: 1,
       backend: 'host',
       ...(engines ? { engines } : {}),
+      ...(layout ? { layout } : {}),
       recipePath: plan.recipePath,
       createdAt: new Date().toISOString(),
       connectomeHost: {
@@ -806,6 +849,7 @@ export async function runHostBackend(
       launch: { kind: 'script', script: join(installDir, 'run.sh'), ...(userUnit !== undefined ? { userUnit: join(installDir, options.userUnit!) } : {}) },
     };
     if (options.candidate) { syncTree(installDir); publish(join(installDir, LOCKFILE_NAME), JSON.stringify(lock, null, 2) + '\n'); }
+    else if (layout) writeOutput(join(installDir, LOCKFILE_NAME), JSON.stringify(lock, null, 2) + '\n');
     else writeLockfile(installDir, lock);
   } catch (err) {
     log.error(`write failed: ${err instanceof Error ? err.message : String(err)}`);

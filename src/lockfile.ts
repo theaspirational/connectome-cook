@@ -42,6 +42,7 @@ export interface LockedRequirement {
 export interface Lockfile {
   version: 1;
   /** Operator-selected engines, validated against the acquired host. */
+  layout?: import('./host-layout.js').HostLayout;
   engines?: import('./host-engines.js').HostEngines;
   /** Which backend materialized this directory. */
   backend: 'docker' | 'host';

@@ -1,3 +1,4 @@
+import { hostLayout } from './host-layout.js';
 import { candidateCommand, seedCommand, CANDIDATE_HELP } from './candidate/commands.js';
 import { guard } from './candidate/io.js';
 import { CandidateError } from './candidate/schema.js';
@@ -182,6 +183,7 @@ ${log.bold('Flags:')}
                          references render as empty (default: refuse)
   --env-file <path>      Read variable values from this file before prompting
   --ch-repo <url>        connectome-host repo (default: ${DEFAULT_CH_REPO_URL})
+  --layout <local-json>  Opt-in split roots and explicit connector-state mappings
   --user-unit <name.service> Export a user unit only (requires selected engines)
   --bun-path <absolute>  Validate host engines (requires --node-path)
   --node-path <absolute> Select Node for host stdio consumers
@@ -193,7 +195,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   if (argv.some(a => a === '--hold' || a.startsWith('--hold='))) return candidateCommand('prepare', argv);
   const flags = mri(argv, {
     boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates'],
-    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit'],
+    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit', 'layout'],
     alias: { h: 'help' },
   });
 
@@ -257,6 +259,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   );
   const result = await runHostBackend(planResult.plan, {
     installDir,
+    layout: flags.layout ? hostLayout(JSON.parse(readFileSync(flags.layout, 'utf8')), installDir) : undefined,
     userUnit: flags['user-unit'],
     bunPath: flags['bun-path'],
     nodePath: flags['node-path'],

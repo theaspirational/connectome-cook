@@ -94,3 +94,42 @@ test('held preparation rejects user-unit export before reserving output', () => 
   expect(result.status).not.toBe(0);
   expect(existsSync(out)).toBe(false);
 });
+
+function splitLayout() {
+  return { schema: 'connectome.host-layout/v1', runtime: out, config: join(dir, 'config'), state: join(dir, 'state'), workspace: join(dir, 'workspace'), credentials: join(dir, 'credentials'), connectorState: { local: { SETTINGS: 'settings/config.json' } } };
+}
+function layoutFile() {
+  const path = join(dir, 'layout.json'); writeFileSync(path, JSON.stringify(splitLayout())); return path;
+}
+test('CLI split install separates configuration, code, state and workspace and exports static unit', () => {
+  const c = splitLayout();
+  const args = ['--bun-path', bun, '--node-path', node, '--layout', layoutFile(), '--user-unit', 'example.service'];
+  const result = install(args);
+  if (result.status) console.error(result.stdout, result.stderr);
+  expect(result.status).toBe(0);
+  expect(existsSync(join(c.config, 'recipes/recipe.json'))).toBe(true);
+  expect(existsSync(join(out, 'recipes'))).toBe(false);
+  const config = JSON.parse(readFileSync(join(c.config, 'recipes/recipe.json'), 'utf8'));
+  expect(config.mcpServers.local.env.SETTINGS).toBe(join(c.state, 'connectors/local/settings/config.json'));
+  const launcher = readFileSync(join(out, 'run.sh'), 'utf8');
+  expect(launcher).toContain("export DATA_DIR='" + c.state + "'");
+  expect(launcher).toContain("cd '" + c.workspace + "'");
+  expect(launcher).toContain("'" + join(c.config, 'recipes/recipe.json') + "'");
+  expect(readFileSync(join(out, 'example.service'), 'utf8')).toContain('WorkingDirectory="' + c.workspace + '"');
+  expect(install(args).status).toBe(0);
+  expect(install(['--bun-path', bun, '--node-path', node]).status).not.toBe(0);
+});
+test('split layout refuses missing engines, unknown state consumers, legacy templates and held preparation', () => {
+  const path = layoutFile();
+  expect(install(['--layout', path]).status).not.toBe(0);
+  expect(install(['--layout', path, '--hold']).status).not.toBe(0);
+  const c = { ...splitLayout(), connectorState: { missing: { SETTINGS: 'file' } } };
+  writeFileSync(path, JSON.stringify(c));
+  expect(install(['--layout', path, '--bun-path', bun, '--node-path', node]).status).not.toBe(0);
+  writeFileSync(path, JSON.stringify(splitLayout()));
+  const original = JSON.parse(readFileSync(recipe, 'utf8'));
+  original.containerTemplateFiles = [{ path: '/app/settings.json', content: 'settings' }];
+  writeFileSync(recipe, JSON.stringify(original));
+  expect(install(['--layout', path, '--bun-path', bun, '--node-path', node]).status).not.toBe(0);
+  expect(existsSync(out)).toBe(false);
+});
