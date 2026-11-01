@@ -23,8 +23,9 @@ Existing help/default commands are unchanged; use `cook deployment --help`.
 ## Binding fields
 
 `bindings.json` is the `manifest` object **without** its derived `revision`.
-All listed fields except `configRevision` are required; every object is closed. Duplicate JSON keys,
-unknown fields/schemas, malformed digests and unresolved source pins reject.
+All listed fields except `configRevision` are required; every object is closed.
+Duplicate JSON keys, unknown fields/schemas, malformed digests and unresolved
+source pins reject.
 `Name` is `[A-Za-z0-9][A-Za-z0-9_.@-]*`; names in each list are unique.
 `Digest` is `sha256:` plus 64 lowercase hex digits.
 
@@ -32,7 +33,7 @@ unknown fields/schemas, malformed digests and unresolved source pins reject.
 | --- | --- |
 | `configRevision` | Optional: absent, null, or a full 40-character lowercase configuration Git commit; no branch/tag/PR head. A supplied commit is unverified metadata and is included in the deployment revision. |
 | `profiles` | Nonempty distinct Name array, at least one unit per profile. |
-| `roles` | `{name, kind, path, owner: {uid, gid}}[]`; kinds `config` and `runtime` required; `state`, `workspace`, `credentials` optional, except credentials are required when providers are nonempty. Config/runtime roots must neither contain nor be contained by state/workspace/credentials roots. Paths are distinct canonical absolute POSIX paths; owner IDs are nonnegative safe integers. Repeat a kind for split roots. Envelope `agent.id`/`lineage` remain the immutable subject identity, not inferred from accounts/paths. |
+| `roles` | `{name, kind, path, owner: {uid, gid}}[]`; kinds `config` and `runtime` required; `state`, `workspace`, `credentials` optional, except credentials are required when providers are nonempty. Config/runtime roots must neither contain nor be contained by state/workspace/credentials roots. Private role roots must sit outside every declared config/runtime root; candidate-local `<root>/data` is deliberately not declarable because it is disposable. Paths are distinct canonical absolute POSIX paths; owner IDs are nonnegative safe integers. Repeat a kind for split roots. Envelope `agent.id`/`lineage` remain the immutable subject identity, not inferred from accounts/paths. |
 | `providers` | `{name, required, consumer, role, destination}[]`; references **by name only**. `consumer` names a profile, `role` a credentials-role name, `destination` a canonical relative path. Destinations cannot collide within a role. No provider type, retrieval parameters, values or value hashes. Empty array means no providers. |
 | `units` | Nonempty `{name, scope, profile, artifacts, after}[]`; scope `user` or `system`, profile from `profiles`, nonempty distinct artifact-name array. `after` contains distinct other declared unit names in an acyclic graph (internal ordering only). This declares bindings, not generated/effective systemd units or readiness. |
 | `artifacts` | Nonempty `{name, role, path, digest}[]`; role names a config/runtime role, path is canonical relative to that role. Both config and runtime artifacts required. Every locked host/component/local-extension code root needs a matching runtime artifact. Digests are supplied nonsecret artifact/closure metadata, not a claim that cook verified the closure. |
@@ -81,8 +82,8 @@ change revision. This conservative version identifier is not a code-only hash.
 The manifest export/read adapter recomputes revision, not the generic wire
 validator. Legacy records incur no revision computation. Export also verifies
 exact lock bytes, full host/component commits, credential-free source URLs and
-artifact-root coverage. It
-cannot prove a supplied config commit, artifact digest or owner mapping is true.
+artifact-root coverage. It cannot prove a supplied config commit, artifact digest
+or owner mapping is true.
 
 ## Compatibility and observations
 
