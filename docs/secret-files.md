@@ -49,17 +49,20 @@ uid, exactly **0600**. By default a public or otherwise mismatched mode refuses
 without changing anything. `--allow-tightening` explicitly permits removal of
 excess permissions through replacement; it never chmods the old inode or adds
 permissions. Symlink roots/ancestors/targets, hardlinked targets, noncanonical
-paths (including `..`, absolute destinations and NUL), unknown names, duplicate
-paths and overlapping file/directory destinations refuse. Errors use a fixed
-code, never an underlying error message or input value.
+paths (including `..`, absolute destinations, backslash and NUL), unknown names,
+duplicate paths and overlapping file/directory destinations refuse. Errors use a fixed
+code, never an underlying error message or input value. Private-write refusals
+include their code, e.g. `E_SECRET_SAVE (E_PRIVATE_MODE): secret save refused.`
+`E_PRIVATE_UNSUPPORTED` means not Linux or unavailable `/proc/self/fd`.
 
 ## API and filesystem contract
 
 `src/private-write.ts` exports `privateWrite(root, relativePath, bytes, options)`;
 `src/secret-save.ts` exports `secretFiles(unknown)` and
 `saveSecret(config, name, bytes, options)`. The primitive also accepts declared
-0400 mode. `options.test` is isolated fault/stat injection, never a config/CLI
-feature. No other write path is automatically migrated to this primitive.
+0400 mode. Fault/stat injection is confined to the explicitly test-only
+`privateWriteForTest` export, not public write/save options or config/CLI.
+No other write path is automatically migrated to this primitive.
 
 The implementation deliberately requires **Linux with `/proc/self/fd`** and a
 filesystem supporting atomic same-directory rename and file/directory fsync.

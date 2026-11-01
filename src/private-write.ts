@@ -10,13 +10,13 @@ function refuse(code: PrivateWriteError['code']): never { throw new PrivateWrite
 export interface PrivateWriteOptions {
   mode?: 0o600 | 0o400;
   allowTightening?: boolean;
-  /** Isolated fault/stat injection for tests; never populated from config. */
-  test?: {
-    stat?: (path: string) => Stats;
-    write?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
-    point?: (point: 'created' | 'written' | 'file-synced') => void;
-    sync?: (fd: number) => void;
-  };
+}
+/** Only the explicitly test-only entry point accepts fault/stat injection. */
+interface PrivateWriteTestHooks {
+  stat?: (path: string) => Stats;
+  write?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
+  point?: (point: 'created' | 'written' | 'file-synced') => void;
+  sync?: (fd: number) => void;
 }
 export interface PrivateWriteResult { durability: 'synced' | 'uncertain' }
 
@@ -34,17 +34,26 @@ const same = (a: Stats, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino
  * The declared root and its parents must not be symlinks. Serialize writers
  * to the SAME file; processes under the same uid are a trusted boundary. */
 export function privateWrite(root: string, path: string, value: string | Uint8Array, options: PrivateWriteOptions = {}): PrivateWriteResult {
+  return writePrivate(root, path, value, options);
+}
+/** Test-only export. Production callers must use privateWrite. */
+export function privateWriteForTest(root: string, path: string, value: string | Uint8Array, options: PrivateWriteOptions & { test?: PrivateWriteTestHooks } = {}): PrivateWriteResult {
+  return writePrivate(root, path, value, options, options.test);
+}
+function writePrivate(root: string, path: string, value: string | Uint8Array, options: PrivateWriteOptions, test: PrivateWriteTestHooks = {}): PrivateWriteResult {
   const dirs: number[] = [];
   let temp: string | undefined, tempFd: number | undefined, inode: Stats | undefined;
   let committed = false;
-  const stat = options.test?.stat ?? lstatSync;
-  const sync = options.test?.sync ?? fsyncSync;
+  const stat = test.stat ?? lstatSync;
+  const sync = test.sync ?? fsyncSync;
   const observe = (p: string): Stats | undefined => {
     try { return stat(p); } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error; }
   };
   try {
     const uid = process.geteuid?.();
     if (process.platform !== 'linux' || uid === undefined) refuse('E_PRIVATE_UNSUPPORTED');
+    try { dirs.push(openSync('/proc/self/fd', F.O_RDONLY | F.O_DIRECTORY)); }
+    catch { refuse('E_PRIVATE_UNSUPPORTED'); }
     const parts = privatePathParts(path);
     if (typeof root !== 'string' || !root.startsWith('/')) refuse('E_PRIVATE_PATH');
     const rootParts = privatePathParts(root.slice(1));
@@ -80,15 +89,15 @@ export function privateWrite(root: string, path: string, value: string | Uint8Ar
     tempFd = openSync(temp, F.O_WRONLY | F.O_CREAT | F.O_EXCL | F.O_NOFOLLOW, mode);
     inode = fstatSync(tempFd);
     fchmodSync(tempFd, mode); // exact declared mode, independent of umask
-    options.test?.point?.('created');
+    test.point?.('created');
     const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : value;
-    const write = options.test?.write ?? ((fd, data, offset, length) => writeSync(fd, data, offset, length));
+    const write = test.write ?? ((fd, data, offset, length) => writeSync(fd, data, offset, length));
     for (let offset = 0; offset < bytes.byteLength;) {
       const n = write(tempFd, bytes, offset, bytes.byteLength - offset);
       if (!Number.isInteger(n) || n <= 0 || n > bytes.byteLength - offset) refuse('E_PRIVATE_IO');
       offset += n;
     }
-    options.test?.point?.('written'); sync(tempFd); options.test?.point?.('file-synced');
+    test.point?.('written'); sync(tempFd); test.point?.('file-synced');
     const now = observe(target);
     if (now) checkFile(now);
     if (!!before !== !!now || (before && now && !same(before, now))) refuse('E_PRIVATE_PATH');
