@@ -61,7 +61,7 @@ import {
   type Lockfile,
   type LockedComponent,
 } from '../lockfile.js';
-import { preflightHostEngines, type HostEngines } from '../host-engines.js';
+import { hostBuildPath, preflightHostEngines, type HostEngines } from '../host-engines.js';
 import type { BuildResult } from './docker.js';
 
 export interface HostBackendOptions {
@@ -69,6 +69,7 @@ export interface HostBackendOptions {
   candidate?: boolean;
   /** Both absolute paths opt into fail-closed host engine validation. */
   bunPath?: string;
+  /** Absolute Node path, required together with bunPath. */
   nodePath?: string;
   /** Install root. Default: ~/.connectome/installs/<slug>. */
   installDir: string;
@@ -490,7 +491,7 @@ export async function runHostBackend(
     options = { ...options, chCommit: checked.commit };
   }
   const buildEnv = buildEnvironment(plan);
-  if (engines) buildEnv.PATH = dirname(engines.bun.path) + ':' + dirname(engines.node.path) + ':' + (buildEnv.PATH ?? '');
+  if (engines) buildEnv.PATH = hostBuildPath(engines, buildEnv.PATH);
   const parent = plan.parentWalk.recipe;
   const hasSidecars = (parent.services ?? []).length > 0;
 

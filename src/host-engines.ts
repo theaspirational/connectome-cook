@@ -2,13 +2,16 @@
 import { execFileSync } from 'node:child_process';
 import { accessSync, constants, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { satisfies, valid, validRange } from 'semver';
 import { gitEnvironment, processAllowlistEnv } from './process-env.js';
 import { assertCredentialFreeSourceUrl } from './source-url.js';
 
 export interface HostEngine { path: string; version: string }
 export interface HostEngines { bun: HostEngine; node: HostEngine }
+export function hostBuildPath(engines: HostEngines, parentPath?: string): string {
+  return [dirname(engines.bun.path), dirname(engines.node.path), ...(parentPath?.split(':') ?? [])].filter(Boolean).join(':');
+}
 export function checkEngine(path: string, range: unknown): HostEngine {
   try {
     if (!isAbsolute(path) || /[\0\r\n]/.test(path) || typeof range !== 'string' || !range.trim() || !validRange(range)) throw 0;
