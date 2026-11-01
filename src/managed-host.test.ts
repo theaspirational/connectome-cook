@@ -119,6 +119,35 @@ test('CLI split install separates configuration, code, state and workspace and e
   expect(install(args).status).toBe(0);
   expect(install(['--bun-path', bun, '--node-path', node]).status).not.toBe(0);
 });
+test('split layout reinstall ignores root, consumer and environment key order but rejects changed paths', () => {
+  const c = {
+    ...splitLayout(),
+    connectorState: {
+      local: { FIRST: 'settings/first.json', SECOND: 'settings/second.json' },
+      other: { THIRD: 'third.json', FOURTH: 'fourth.json' },
+    },
+  };
+  const original = JSON.parse(readFileSync(recipe, 'utf8'));
+  original.mcpServers.other = { ...original.mcpServers.local };
+  writeFileSync(recipe, JSON.stringify(original));
+  mkdirSync(join(dir, 'other')); writeFileSync(join(dir, 'other/fixture.js'), '// build-only fixture');
+  const path = join(dir, 'reordered-layout.json');
+  writeFileSync(path, JSON.stringify(c));
+  const args = ['--bun-path', bun, '--node-path', node, '--layout', path];
+  expect(install(args).status).toBe(0);
+  const reordered: Record<string, unknown> = Object.fromEntries(Object.entries(c).reverse());
+  reordered.connectorState = Object.fromEntries(Object.entries(c.connectorState).reverse().map(
+    ([consumer, env]) => [consumer, Object.fromEntries(Object.entries(env).reverse())],
+  ));
+  writeFileSync(path, JSON.stringify(reordered));
+  const result = install(args);
+  expect(result.status).toBe(0);
+  expect(result.stderr).not.toContain('E_HOST_LAYOUT');
+  writeFileSync(path, JSON.stringify({ ...c, connectorState: { ...c.connectorState, local: { ...c.connectorState.local, FIRST: 'changed.json' } } }));
+  const changed = install(args);
+  expect(changed.status).not.toBe(0);
+  expect(changed.stderr).toContain('E_HOST_LAYOUT');
+});
 test('split layout refuses missing engines, unknown state consumers, legacy templates and held preparation', () => {
   const path = layoutFile();
   expect(install(['--layout', path]).status).not.toBe(0);
