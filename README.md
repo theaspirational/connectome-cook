@@ -259,3 +259,8 @@ It no longer warns and falls back to human text.
 See [held-candidate commands, all seven schemas, compatibility table and
 maintainer decisions](docs/held-candidates.md). Do not attach production data,
 credentials or consumers; even successful verification does not authorize launch.
+
+### File-only secret save (opt-in)
+
+For named raw secret files without fetch, build or service effects, see
+[the private-file declaration and save contract](docs/secret-files.md).
