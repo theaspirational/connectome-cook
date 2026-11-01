@@ -25,6 +25,16 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 function install(extra: string[] = []) {
   return spawnSync(process.execPath, [resolve('bin/cook'), 'install', recipe, '--out', out, '--ch-repo', repo, '--ch-ref', 'main', '--no-prompts', '--yes', ...extra], { encoding: 'utf8' });
 }
+function assertHeldUsage(extra: string[]): void {
+  const result = install([
+    '--hold', '--agent-id', '01234567-89ab-cdef-0123-456789abcdef',
+    '--lineage-id', 'abcdef01-2345-6789-abcd-ef0123456789',
+    '--json', ...extra,
+  ]);
+  expect(result.status).toBe(1);
+  expect(JSON.parse(result.stdout).findings.map((finding: { code: string }) => finding.code)).toEqual(['E_USAGE']);
+  expect(existsSync(out)).toBe(false);
+}
 test('engine preflight checks selected source, pins commit, and records absolute engines through CLI', () => {
   const checked = preflightHostEngines(repo, 'main', bun, node);
   expect(checked.commit).toMatch(/^[a-f0-9]{40}$/);
@@ -90,9 +100,7 @@ test('unit export refuses unsafe names and missing selected engines without mate
 });
 
 test('held preparation rejects user-unit export before reserving output', () => {
-  const result = install(['--hold', '--user-unit', 'example.service']);
-  expect(result.status).not.toBe(0);
-  expect(existsSync(out)).toBe(false);
+  assertHeldUsage(['--user-unit', 'example.service']);
 });
 
 function splitLayout() {
@@ -151,7 +159,7 @@ test('split layout reinstall ignores root, consumer and environment key order bu
 test('split layout refuses missing engines, unknown state consumers, legacy templates and held preparation', () => {
   const path = layoutFile();
   expect(install(['--layout', path]).status).not.toBe(0);
-  expect(install(['--layout', path, '--hold']).status).not.toBe(0);
+  assertHeldUsage(['--layout', path]);
   const c = { ...splitLayout(), connectorState: { missing: { SETTINGS: 'file' } } };
   writeFileSync(path, JSON.stringify(c));
   expect(install(['--layout', path, '--bun-path', bun, '--node-path', node]).status).not.toBe(0);
@@ -191,7 +199,7 @@ test('credential integration refuses missing engines, held preparation, unknown 
   const path = join(dir, 'bindings.json');
   writeFileSync(path, JSON.stringify(bindings));
   expect(install(['--credential-bindings', path]).status).not.toBe(0);
-  expect(install(['--credential-bindings', path, '--hold']).status).not.toBe(0);
+  assertHeldUsage(['--credential-bindings', path]);
   for (const patch of [
     { root: out }, { root: join(out, 'credentials') },
     { consumers: { missing: { API_TOKEN: 'token' } } },
