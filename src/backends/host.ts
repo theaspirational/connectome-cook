@@ -1,5 +1,5 @@
 import { guard, noLinks, publish, syncDir, syncTree } from '../candidate/io.js';
-import { fail } from '../candidate/schema.js';
+import { canonical, fail } from '../candidate/schema.js';
 /**
  * Host backend — materializes an InstallPlan directly onto the operator's
  * machine instead of into a docker image. This is the "link against the
@@ -72,6 +72,7 @@ export interface HostBackendOptions {
   candidate?: boolean;
   /** Export a static user unit under the installation; never install/start it. */
   userUnit?: string;
+  /** Opt-in separate configuration, runtime, state, workspace and credential roots. */
   layout?: HostLayout;
   /** Both absolute paths opt into fail-closed host engine validation. */
   bunPath?: string;
@@ -579,7 +580,10 @@ export async function runHostBackend(
     log.warn(`existing ${LOCKFILE_NAME} unreadable (${err instanceof Error ? err.message : String(err)}) — treating as fresh install`);
   }
 
-  if (existingLock && JSON.stringify(existingLock.layout) !== JSON.stringify(layout)) throw new Error('E_HOST_LAYOUT: layout changes require a fresh stopped installation');
+  const sameLayout = existingLock?.layout === undefined || layout === undefined
+    ? existingLock?.layout === layout
+    : canonical(existingLock.layout) === canonical(layout);
+  if (existingLock && !sameLayout) throw new Error('E_HOST_LAYOUT: layout changes require a fresh stopped installation');
   if (engines && JSON.stringify(existingLock?.engines) !== JSON.stringify(engines)) existingLock = null;
 
   // ---- Confirm gate: commands run on the operator's machine. ----
