@@ -55,20 +55,30 @@ export function saveSecret(config: SecretFiles, name: string, value: string | Ui
   } catch (error) { throw saveError(error); }
 }
 
+function secretDirectories(c: SecretFiles): Set<string> {
+  const dirs = new Set([c.root]);
+  for (const path of Object.values(c.files)) {
+    let parent = c.root;
+    for (const part of dirname(path).split('/').filter(p => p !== '.')) {
+      parent = join(parent, part); dirs.add(parent);
+    }
+  }
+  return dirs;
+}
+/** Validate declared directories without creating anything. Missing directories
+ * are allowed; existing roots and file parents must already be private. */
+export function validateSecretDirectories(config: SecretFiles): void {
+  try {
+    for (const dir of secretDirectories(secretFiles(config))) provisionPrivateDirectory(dir, false);
+  } catch (error) { throw saveError(error); }
+}
 /** Provision only declared directories, never files, permissions or ownership
  * changes on existing directories. Values remain a separate stdin operation. */
 export function provisionSecretFiles(config: SecretFiles): { provisioned: true } {
   try {
     const c = secretFiles(config);
-    const dirs = new Set([c.root]);
-    for (const path of Object.values(c.files)) {
-      let parent = c.root;
-      for (const part of dirname(path).split('/').filter(p => p !== '.')) {
-        parent = join(parent, part); dirs.add(parent);
-      }
-    }
-    for (const dir of dirs) provisionPrivateDirectory(dir, false);
-    for (const dir of dirs) provisionPrivateDirectory(dir);
+    validateSecretDirectories(c);
+    for (const dir of secretDirectories(c)) provisionPrivateDirectory(dir);
     return { provisioned: true };
   } catch (error) { throw saveError(error); }
 }

@@ -212,3 +212,19 @@ test('credential declaration parse failures redact accidentally supplied content
   expect(result.stderr + result.stdout).not.toContain(sentinel);
   expect(existsSync(out)).toBe(false);
 });
+
+test('unsafe declared credential file parents refuse before confirmation or output root creation', () => {
+  const c = splitLayout();
+  mkdirSync(c.credentials, { mode: 0o700 });
+  const parent = join(c.credentials, 'provider'); mkdirSync(parent, { mode: 0o755 });
+  const path = join(dir, 'unsafe-parent-bindings.json');
+  writeFileSync(path, JSON.stringify({ schema: 'connectome.credential-bindings/v1', root: c.credentials, files: { token: 'provider/token' }, consumers: { local: { API_TOKEN: 'token' } } }));
+  for (const extra of [[], ['--layout', layoutFile()]]) {
+    const result = install(['--bun-path', bun, '--node-path', node, '--credential-bindings', path, ...extra]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('E_CREDENTIAL_BINDINGS');
+    expect(result.stdout).not.toContain('Host install plan');
+    expect(existsSync(out)).toBe(false);
+    expect(existsSync(c.config)).toBe(false);
+  }
+});
