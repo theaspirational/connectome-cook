@@ -77,6 +77,7 @@ export interface HostBackendOptions {
   userUnit?: string;
   /** Opt-in separate configuration, runtime, state, workspace and credential roots. */
   layout?: HostLayout;
+  /** Nonsecret file bindings for named stdio consumer launch adapters. */
   credentials?: CredentialBindings;
   /** Both absolute paths opt into fail-closed host engine validation. */
   bunPath?: string;

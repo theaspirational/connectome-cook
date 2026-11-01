@@ -41,6 +41,7 @@ export interface LockedRequirement {
 
 export interface Lockfile {
   version: 1;
+  /** Declared credential paths and consumers only; never credential values. */
   credentials?: import('./host-credentials.js').CredentialBindings;
   /** Explicit roots and connector-state bindings for a split host install. */
   layout?: import('./host-layout.js').HostLayout;
