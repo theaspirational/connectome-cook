@@ -41,6 +41,7 @@ export interface LockedRequirement {
 
 export interface Lockfile {
   version: 1;
+  credentials?: import('./host-credentials.js').CredentialBindings;
   /** Explicit roots and connector-state bindings for a split host install. */
   layout?: import('./host-layout.js').HostLayout;
   /** Operator-selected engines, validated against the acquired host. */

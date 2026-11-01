@@ -61,6 +61,9 @@ import {
   type Lockfile,
   type LockedComponent,
 } from '../lockfile.js';
+import { credentialBindings, credentialSecretFiles, renderCredentialAdapter, validateCredentialConsumers, type CredentialBindings } from '../host-credentials.js';
+import { provisionSecretFiles } from '../secret-save.js';
+import { provisionPrivateDirectory } from '../private-directory.js';
 import { applyConnectorState, hostLayout, provisionLayout, validateLayoutConsumers, type HostLayout } from '../host-layout.js';
 import { privateWrite } from '../private-write.js';
 import { renderUserUnit, validateUserUnit } from '../host-unit.js';
@@ -74,6 +77,7 @@ export interface HostBackendOptions {
   userUnit?: string;
   /** Opt-in separate configuration, runtime, state, workspace and credential roots. */
   layout?: HostLayout;
+  credentials?: CredentialBindings;
   /** Both absolute paths opt into fail-closed host engine validation. */
   bunPath?: string;
   /** Absolute Node path, required together with bunPath. */
@@ -486,6 +490,15 @@ export async function runHostBackend(
     if (Object.hasOwn(plan.values, 'DATA_DIR') || Object.hasOwn(plan.values, 'WORKSPACE_DIR')) throw new Error('E_HOST_LAYOUT: layout owns runtime roots');
     validateLayoutConsumers(layout, plan.walks.map(w => w.recipe));
   }
+  const credentials = options.credentials === undefined ? undefined : credentialBindings(options.credentials);
+  if (credentials) {
+    if (options.candidate || !options.bunPath || !options.nodePath || plan.credentialFiles.length) throw new Error('E_CREDENTIAL_BINDINGS: selected legacy engines without legacy credential files required');
+    validateCredentialConsumers(credentials, plan.walks.map(w => w.recipe), installDir, layout?.credentials);
+    if (layout) for (const [consumer, mapping] of Object.entries(credentials.consumers)) {
+      if (Object.keys(mapping).some(name => Object.hasOwn(layout.connectorState[consumer] ?? {}, name))) throw new Error('E_CREDENTIAL_BINDINGS: conflicting state and credential environment');
+    }
+  }
+  const adapterDir = join(installDir, 'credential-adapters');
   const configDir = layout?.config ?? installDir;
   const writeOutput = (path: string, content: string, opts?: { mode: number }) => {
     if (layout) {
@@ -556,6 +569,9 @@ export async function runHostBackend(
     const rel = relative(installDir, target);
     if (!rel || rel.startsWith('..') || /^(?:run\.sh|connectome\.lock|\.cook)(?:\/|$)/.test(rel)) throw new Error('E_HOST_LAYOUT: code target escapes runtime root');
   }
+  if (credentials) for (const target of [...actions.clones.map(a => a.target), ...actions.copies.map(a => a.target)]) {
+    if (target === adapterDir || target.startsWith(adapterDir + '/') || adapterDir.startsWith(target + '/')) throw new Error('E_CREDENTIAL_BINDINGS: code target overlaps adapters');
+  }
   if (engines) actions.clones[0]!.buildCommand = shellQuote(engines.bun.path) + ' install';
   if (options.candidate) {
     // Never allow a recipe write to collide with controls or history. Builds
@@ -610,6 +626,11 @@ export async function runHostBackend(
   else {
     mkdirSync(installDir, { recursive: true });
     mkdirSync(join(installDir, 'recipes'), { recursive: true });
+  }
+
+  if (credentials) {
+    provisionSecretFiles(credentialSecretFiles(credentials));
+    provisionPrivateDirectory(adapterDir);
   }
 
   // ---- Clone + build components (idempotent against the lock). ----
@@ -716,6 +737,15 @@ export async function runHostBackend(
       if (engines) for (const server of Object.values(configuration.mcpServers ?? {})) {
         if (server.command === 'node') server.command = engines.node.path;
         if (server.command === 'bun') server.command = engines.bun.path;
+      }
+      if (credentials) for (const consumer of Object.keys(credentials.consumers)) {
+        const server = configuration.mcpServers?.[consumer];
+        if (!server) continue;
+        const name = recipeFilename(walk.path) + '.' + consumer + '.mjs';
+        const script = renderCredentialAdapter(credentials, consumer, server.command!, server.args ?? []);
+        if (privateWrite(adapterDir, name, script).durability !== 'synced') throw new Error('E_PRIVATE_IO');
+        server.command = engines!.node.path;
+        server.args = [join(adapterDir, name)];
       }
       writeOutput(
         join(configDir, 'recipes', recipeFilename(walk.path)),
@@ -830,6 +860,7 @@ export async function runHostBackend(
       backend: 'host',
       ...(engines ? { engines } : {}),
       ...(layout ? { layout } : {}),
+      ...(credentials ? { credentials } : {}),
       recipePath: plan.recipePath,
       createdAt: new Date().toISOString(),
       connectomeHost: {

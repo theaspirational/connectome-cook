@@ -1,5 +1,7 @@
 /** Opt-in raw secret-file destinations, separate from generated deployment
  * config and program-refreshed credentials. Values never enter a declaration. */
+import { provisionPrivateDirectory } from './private-directory.js';
+import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { PrivateWriteError, privatePathParts, privateWrite, type PrivateWriteOptions, type PrivateWriteResult } from './private-write.js';
 
@@ -53,12 +55,36 @@ export function saveSecret(config: SecretFiles, name: string, value: string | Ui
   } catch (error) { throw saveError(error); }
 }
 
-const USAGE = 'cook secret save --config <local-json> --name <destination> [--allow-tightening] < value\nSaves exact stdin bytes only; an explicit restart or reload is needed for adoption.\n';
+/** Provision only declared directories, never files, permissions or ownership
+ * changes on existing directories. Values remain a separate stdin operation. */
+export function provisionSecretFiles(config: SecretFiles): { provisioned: true } {
+  try {
+    const c = secretFiles(config);
+    const dirs = new Set([c.root]);
+    for (const path of Object.values(c.files)) {
+      let parent = c.root;
+      for (const part of dirname(path).split('/').filter(p => p !== '.')) {
+        parent = join(parent, part); dirs.add(parent);
+      }
+    }
+    for (const dir of dirs) provisionPrivateDirectory(dir, false);
+    for (const dir of dirs) provisionPrivateDirectory(dir);
+    return { provisioned: true };
+  } catch (error) { throw saveError(error); }
+}
+
+const USAGE = 'cook secret provision --config <local-json>\ncook secret save --config <local-json> --name <destination> [--allow-tightening] < value\nSaves exact stdin bytes only; an explicit restart or reload is needed for adoption.\n';
 /** Strict parsing: no value argv/env option and no remote config resolution. */
 export async function secretCommand(argv: string[]): Promise<number> {
   if (!argv.length) { process.stdout.write(USAGE); return 2; }
   if (argv.length === 1 && (argv[0] === '--help' || argv[0] === '-h')) { process.stdout.write(USAGE); return 0; }
   try {
+    if (argv[0] === 'provision') {
+      if (argv.length !== 3 || argv[1] !== '--config' || !argv[2]) throw new SecretSaveError();
+      const config = secretFiles(JSON.parse(readFileSync(argv[2], 'utf8')));
+      process.stdout.write(JSON.stringify(provisionSecretFiles(config)) + '\n');
+      return 0;
+    }
     if (argv[0] !== 'save') throw new SecretSaveError();
     let configPath: string | undefined, name: string | undefined, allowTightening = false;
     for (let i = 1; i < argv.length; i++) {

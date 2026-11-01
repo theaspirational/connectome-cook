@@ -278,3 +278,5 @@ Host installs: [operator-selected engine preflight](docs/host-engines.md).
 Host installs: [static systemd user-unit export](docs/host-user-unit.md).
 
 Host installs: [opt-in split layout and manual handoff](docs/host-layout.md).
+
+Host installs: [credential provisioning and named stdio adapters](docs/host-credentials.md).

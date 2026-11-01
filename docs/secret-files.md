@@ -89,3 +89,7 @@ safely be rolled back. This returns `saved: true, durability: "uncertain"`
 retry: inspect the destination/durability before deciding what to do. CLI exit 0
 means saved and synced; exit 2 means refused. No result proves that a running
 consumer has adopted the new value.
+
+To create declared private directories first, use cook secret provision --config secret-files.json.
+See [named stdio credential adapters](host-credentials.md) for explicit consumer wiring.
+Provision does not save values or restart consumers.
