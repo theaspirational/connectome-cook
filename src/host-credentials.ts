@@ -2,8 +2,7 @@
  * the generated launch adapter, never by materialization or recipe lowering. */
 import { readFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import { secretFiles, type SecretFiles } from './secret-save.js';
-import { provisionPrivateDirectory } from './private-directory.js';
+import { secretFiles, validateSecretDirectories, type SecretFiles } from './secret-save.js';
 import type { Recipe } from './vendor/recipe.js';
 
 export interface CredentialBindings {
@@ -27,7 +26,7 @@ export function credentialBindings(value: unknown): CredentialBindings {
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(env) || /^(?:PATH|NODE_OPTIONS|BUN_OPTIONS|ENV|BASH_ENV|SHELLOPTS|IFS|PWD|LD_.*|DYLD_.*)$/.test(env) || typeof name !== 'string' || !Object.hasOwn(c.files, name)) refuse();
       }
     }
-    provisionPrivateDirectory(c.root, false);
+    validateSecretDirectories({ schema: 'connectome.secret-files/v1', root: c.root, files: c.files });
     return c;
   } catch { return refuse(); }
 }
