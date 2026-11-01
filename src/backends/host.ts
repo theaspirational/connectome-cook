@@ -398,7 +398,7 @@ export function renderLauncher(
   if (opts.candidate) return [
     '#!/usr/bin/env bash', '# connectome.candidate-launcher/v1 — one-way hold',
     'set -euo pipefail', 'cd "$(dirname "$0")"',
-    'echo "E_HELD: disposable candidate is held; PR01b cannot activate it." >&2',
+    'echo "E_HELD: disposable candidate is held; activation is not supported." >&2',
     'exit 4', '',
   ].join('\n');
   const lines = [
