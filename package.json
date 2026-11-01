@@ -20,7 +20,8 @@
     "docs/held-candidates.md",
     "docs/deployment-manifest.md",
     "docs/secret-files.md",
-    "docs/host-engines.md"
+    "docs/host-engines.md",
+    "docs/host-user-unit.md"
   ],
   "license": "Apache-2.0",
   "engines": {
