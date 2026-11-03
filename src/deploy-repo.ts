@@ -1,9 +1,9 @@
 /** Deploy declarations are JSON with optional full-line YAML comments, as in
  * connectome-agents. Never evaluate templates, open credential files or fetch. */
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { canonical, hash, parseJSON, UUID } from './candidate/schema.js';
-import { noLinks } from './candidate/io.js';
+import { exists, noLinks } from './candidate/io.js';
 import { assertCredentialFreeSourceUrl } from './source-url.js';
 import { validateRecipe, type Recipe } from './vendor/recipe.js';
 import { parseHostDependencies } from './host-dependency.js';
@@ -93,6 +93,8 @@ function agent(v: unknown): AgentConfig {
     if (!['file','systemd-credential','systemd-credential+copy-0600'].includes(text(c.deliver))) refuse();
     if (c.destination !== undefined) path(c.destination);
   }
+  const unitNames=Object.values(object(a.units)).map(u=>object(u).name);
+  if(new Set(unitNames).size!==unitNames.length)refuse();
   if (versions !== undefined) pins(versions);
   return a as unknown as AgentConfig;
 }
@@ -104,7 +106,12 @@ export interface HostConfig {
 function host(v: unknown): HostConfig {
   const h = closed(v, ['chRepo','chRef','bunPath','nodePath','hostDependencies','userUnit','layout','credentialBindings','agentId','lineage']);
   // Commit/hash/identity positions are typed below, not arbitrary secret slots.
-  secretFree(h, '', true);
+  const {credentialBindings: namedBindings,...otherHost}=h;
+  secretFree(otherHost, '', true);
+  if(namedBindings!==undefined){
+    const c=object(namedBindings);
+    secretFree([c.schema,c.root,...Object.keys(object(c.files)),...Object.values(object(c.files)),...Object.values(object(c.consumers)).flatMap(m=>Object.values(object(m)))]);
+  }
   if (h.chRepo !== undefined) assertCredentialFreeSourceUrl(text(h.chRepo));
   if (h.chRef !== undefined && !/^[0-9a-f]{40}$/.test(text(h.chRef))) refuse();
   for (const k of ['bunPath','nodePath']) if (h[k] !== undefined) path(h[k]);
@@ -120,6 +127,51 @@ function host(v: unknown): HostConfig {
   }
   if (h.credentialBindings !== undefined) credentialBindings(JSON.parse(JSON.stringify(h.credentialBindings).replaceAll('{build}', '/__cook_build__')));
   return h as HostConfig;
+}
+/** Closed adapter surface; dictionary-valued env/source names are intentional.
+ * This does not change the legacy recipe validator or its compatibility rules. */
+function recipeKeys(value: unknown): void {
+  const r=closed(value,['name','description','version','agent','codeExecution','mcpServers','modules','sessionNaming','requirements','extensions','services','containerTemplateFiles','containerDependsOn','containerVolumes']);
+  const a=closed(r.agent,['name','provider','model','systemPrompt','maxTokens','strategy','formatter','contextBudgetTokens','thinking','cacheKeepalive','maxStreamTokens','proseRouting','cacheTtl']);
+  if(a.thinking)closed(a.thinking,['enabled','type','display','budgetTokens']);
+  if(a.cacheKeepalive)closed(a.cacheKeepalive,['enabled','refreshAfterMinutes','maxIdleHours']);
+  if(a.strategy){
+    const st=closed(a.strategy,['type','headWindowTokens','recentWindowTokens','compressionModel','maxMessageTokens','adaptiveResolution','foldingStrategy','targetChunkTokens','compressionSlackRatio','mergeThreshold','enforceBudget','overBudgetGraceRatio','maxSpeculativeL1s','summaryParticipant','compressionRecallBudgetTokens','compressionToolProseFallback','kvUnified']);
+    if(st.compressionToolProseFallback)closed(st.compressionToolProseFallback,['intoTool','fromTools','minChars']);
+    if(st.kvUnified){
+      const kv=closed(st.kvUnified,['policy','tokenBucketSize','continuityBucketSize','fidelityBucketSize','labelCeiling','adoptEpsilon','treeifyNonContiguousSummaries','preserveGapBearingSummaries','hysteresisCertificate']);
+      if(kv.policy)closed(kv.policy,['alpha','budgetLowRatio','budgetHighRatio','budgetUnderLambda','budgetOverLambda','cacheLambda','cacheScale','cacheReadPrice','cacheWritePrice','continuityLambda','continuityScale','continuityRecencyHalfLifeTokens','continuityRecencyFloor','continuityStableHalfLife','continuityStableFloor']);
+    }
+  }
+  if(r.codeExecution)closed(r.codeExecution,['enabled']);
+  if(r.sessionNaming)closed(r.sessionNaming,['examples']);
+  for(const server of Object.values(object(r.mcpServers??{}))){
+    const m=closed(server,['command','args','env','url','transport','token','toolPrefix','enabledFeatureSets','disabledFeatureSets','enabledTools','disabledTools','reconnect','reconnectIntervalMs','channelSubscription','source','sourceMeta','credentialFiles','inheritEnv','requestTimeoutMs','enabledCapabilities','disabledCapabilities']);
+    if(m.credentialFiles!==undefined)refuse('E_DEPLOY_SCOPE');
+    if(m.env)strings(m.env);
+    for(const key of ['source','sourceMeta'])if(m[key]){
+      const source=closed(m[key],['url','ref','install','authSecret','sslBypass','inContainer','systemPackages','npm']);
+      if(source.url)assertCredentialFreeSourceUrl(text(source.url));
+      if(source.install&&typeof source.install==='object')closed(source.install,['run','runtime']);
+      if(source.inContainer)closed(source.inContainer,['path']);
+    }
+  }
+  if(r.modules){
+    const m=closed(r.modules,['subagents','lessons','retrieval','wake','workspace','activity','fleet','webui','mcplAdmin','identity','history','notices','instructions','subscriptionGc','channelMode']);
+    for(const [key,v] of Object.entries(m))if(typeof v!=='boolean'){
+      if(key==='workspace'){
+        const w=closed(v,['mounts','configMount']);
+        if(!Array.isArray(w.mounts))refuse();
+        for(const mount of w.mounts as unknown[])closed(mount,['name','path','mode','watch','ignore','wakeOnChange','autoMaterialize']);
+      } else if(key==='subagents')closed(v,['defaultModel','defaultMaxTokens']);
+      else if(key==='retrieval')closed(v,['model','maxInjected']);
+      else if(key==='activity')closed(v,['channels']);
+      else refuse(); // opaque module configuration needs an explicit adapter
+    }
+  }
+  // These legacy build-time surfaces would read unplanned inputs or write
+  // private configuration. Refuse rather than silently weaken strictness.
+  for(const k of ['requirements','extensions','services','containerTemplateFiles','containerDependsOn','containerVolumes'])if(r[k]!==undefined)refuse('E_DEPLOY_SCOPE');
 }
 export interface DeployPlan {
   schema: 'connectome.deploy-plan/v1'; agent: string;
@@ -142,10 +194,12 @@ export function readDeployRepo(repo: string, slug: string): { plan: DeployPlan; 
   const overrides = a.versions ?? {};
   if (Object.keys(overrides).some(k => !Object.hasOwn(base,k))) refuse();
   const effective = { ...base, ...overrides };
-  const rawRecipe = read(join(dir, 'recipe.json')); secretFree(rawRecipe);
+  const rawRecipe = read(join(dir, 'recipe.json')); secretFree(rawRecipe); recipeKeys(rawRecipe);
   const recipe = validateRecipe(expand(rawRecipe, effective));
-  const h = host(existsSync(join(dir,'host.yml')) ? expand(read(join(dir,'host.yml')),effective) : {});
+  const rawHost=exists(join(dir,'host.yml'))?read(join(dir,'host.yml')):{};
+  const h = host(expand(rawHost,effective));
   const missing = ['chRepo','chRef','bunPath','nodePath','hostDependencies','agentId','lineage'].filter(k => !Object.hasOwn(h,k));
+  for(const key of Object.keys(overrides))if(!JSON.stringify([rawRecipe,rawHost]).includes('{'+key+'}'))missing.push('versions.'+key+'.binding');
   const plan: DeployPlan = { schema:'connectome.deploy-plan/v1', agent:slug,
     effectivePins: Object.fromEntries(Object.keys(base).sort().map(k => [k,{value:effective[k]!,source:Object.hasOwn(overrides,k)?'override':'base'}])),
     recipeDigest:hash(canonical(recipe)), configuration:a, host:h, missing };

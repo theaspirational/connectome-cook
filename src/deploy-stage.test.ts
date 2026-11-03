@@ -73,3 +73,44 @@ test('plan is side effect free and CLI missing fields refuses before creating ro
   for(const command of ['stage','check']){const r=cli(command,['--root',root]);expect(r.status).toBe(2);expect(r.stderr).toContain('E_DEPLOY_MISSING');}
   expect(existsSync(root)).toBe(false);
 });
+test('private root modes and symlink ancestors refuse before build',()=>{
+  mkdirSync(root,{mode:0o755});expect(()=>stageDeploy(repo,'fixture',root)).toThrow();
+  rmSync(root,{recursive:true});symlinkSync(source,root);expect(()=>stageDeploy(repo,'fixture',root)).toThrow();
+});
+test('metadata symlinks refuse without following foreign files',()=>{
+  const link=stageDeploy(repo,'fixture',root),build=readlinkSync(link);
+  const file=join(build,'.cook/deploy-plan.json');rmSync(file);symlinkSync('/dev/zero',file);
+  expect(()=>checkDeploy(plan(),root)).toThrow();
+});
+test('CLI secret errors contain neither values nor unknown supplied keys',()=>{
+  const sentinel='ghp_SYNTHETIC_PRIVATE_SENTINEL';
+  write(join(repo,'agents/fixture/host.yml'),{[sentinel]:sentinel});
+  const r=cli('plan');expect(r.status).not.toBe(0);expect(r.stdout).toBe('');expect(r.stderr).not.toContain(sentinel);
+});
+test('existing current is not changed and runtime link tampering is detected',()=>{
+  mkdirSync(root,{mode:0o700});symlinkSync('/nonexistent/retained',join(root,'current'));
+  const link=stageDeploy(repo,'fixture',root);
+  expect(readlinkSync(join(root,'current'))).toBe('/nonexistent/retained');
+  rmSync(link);symlinkSync(source,link);expect(()=>checkDeploy(plan(),root)).toThrow('E_DEPLOY_LINK');
+});
+test('G1/G2/G3 split options reuse legacy install, never read credential files',()=>{
+  const file=join(repo,'agents/fixture/host.yml'),h=JSON.parse(readFileSync(file,'utf8'));
+  const credentials=join(dir,'credentials');mkdirSync(credentials,{mode:0o700});
+  writeFileSync(join(credentials,'auth'), 'synthetic-private-value',{mode:0o600});
+  h.layout={schema:'connectome.host-layout/v1',runtime:'{build}/runtime',config:'{build}/config',state:'{build}/state',workspace:'{build}/workspace',credentials:'{build}/credentials',connectorState:{}};
+  h.credentialBindings={schema:'connectome.credential-bindings/v1',root:'{build}/credentials',files:{auth:'auth'},consumers:{local:{API_KEY:'auth'}}};
+  write(file,h);write(join(repo,'agents/fixture/recipe.json'),{name:'Fixture',agent:{systemPrompt:'Fixture'},mcpServers:{local:{command:'node',args:['src/index.ts'],source:{url:source,ref:'{runtime}',install:{runtime:'custom',run:'/bin/true'}}}}});
+  const link=stageDeploy(repo,'fixture',root),build=readlinkSync(link);
+  expect(checkDeploy(plan(),root)).toBe(link);
+  const envelope=readFileSync(join(build,'connectome.deployment.json'),'utf8');
+  expect(envelope).not.toContain('synthetic-private-value');
+  expect(existsSync(join(build,'config/recipes/recipe.json'))).toBe(true);
+  // Private roles never enter closure inventories, even if later populated.
+  writeFileSync(join(build,'credentials/auth'),'synthetic-private-value',{mode:0o600});
+  expect(checkDeploy(plan(),root)).toBe(link);
+});
+test('selected engine byte changes invalidate check and restage',()=>{
+  stageDeploy(repo,'fixture',root);writeFileSync(join(dir,'node'),'#!/bin/sh\necho v22.99.0\n');
+  expect(()=>checkDeploy(plan(),root)).toThrow('E_DEPLOY_ENGINE_DRIFT');
+  expect(()=>stageDeploy(repo,'fixture',root)).toThrow('E_DEPLOY_ENGINE_DRIFT');
+});

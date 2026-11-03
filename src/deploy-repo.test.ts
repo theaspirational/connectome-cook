@@ -48,3 +48,14 @@ test('secret-like literals, escaped keys, nested sensitive values refuse without
   const f=fixture();f.write('agents/fixture/recipe.json',{name:'fixture',token:'private-literal'});
   expect(()=>readDeployRepo(f.root,'fixture')).toThrow('E_DEPLOY_SECRET');
 });
+test('unknown recipe and nested source keys refuse',()=>{
+  for(const recipe of [
+    {name:'fixture',agent:{systemPrompt:'Fixture'},unknown:true},
+    {name:'fixture',agent:{systemPrompt:'Fixture',unknown:true}},
+    {name:'fixture',agent:{systemPrompt:'Fixture'},mcpServers:{x:{command:'node',source:{url:'https://example.invalid/repo',unknown:true}}}},
+  ]) { const f=fixture();f.write('agents/fixture/recipe.json',recipe);expect(()=>readDeployRepo(f.root,'fixture')).toThrow(); }
+});
+test('overrides without explicit recipe/build binding cannot silently stage',()=>{
+  const f=fixture();f.write('agents/fixture/agent.yml',{...f.agent,versions:{slack:'override'}});
+  expect(readDeployRepo(f.root,'fixture').plan.missing).toContain('versions.slack.binding');
+});

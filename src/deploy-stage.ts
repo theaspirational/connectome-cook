@@ -21,20 +21,26 @@ function paths(root: string, plan: DeployPlan) {
 }
 function complete(plan: DeployPlan): void { if(plan.missing.length)refuse('E_DEPLOY_MISSING'); }
 function write(path: string, value: string): void { writeFileSync(path,value,{mode:0o600,flag:'wx'}); }
+function readMetadata(path: string): string {
+  noLinks(path); const st=lstatSync(path);
+  if(!st.isFile()||st.nlink!==1||st.uid!==process.geteuid?.()||st.size>16*1024*1024)refuse('E_DEPLOY_FILE');
+  return readFileSync(path,'utf8');
+}
 function digestFile(path: string): string { return 'sha256:'+createHash('sha256').update(readFileSync(path)).digest('hex'); }
 /** No following links into external mutable roles; same-uid hostile concurrent
  * mutation is outside the private-directory threat model used by legacy cook. */
-function inventory(root: string): string {
+function inventory(root: string, excluded: string[] = []): string {
   const rows: unknown[]=[];
   const walk=(dir:string) => {
     for(const name of readdirSync(dir).sort()) {
       const file=join(dir,name), rel=relative(root,file);
+      if(excluded.some(p=>file===p||file.startsWith(p+'/')))continue;
       if(['.cook/tree.json','connectome.deployment.json'].includes(rel))continue;
       const st=lstatSync(file);
       if(st.uid!==process.geteuid?.())refuse('E_DEPLOY_OWNER');
       if(st.isSymbolicLink()) {
         const target=realpathSync(file);
-        if(target!==root&&!target.startsWith(root+'/'))refuse('E_DEPLOY_EXTERNAL_LINK');
+        if(excluded.some(p=>target===p||target.startsWith(p+'/'))||(target!==root&&!target.startsWith(root+'/')))refuse('E_DEPLOY_EXTERNAL_LINK');
         rows.push([rel,'link',readlinkSync(file)]);
       } else if(st.isDirectory()){rows.push([rel,'dir',st.mode&0o7777]);walk(file);}
       else if(st.isFile())rows.push([rel,'file',st.mode&0o7777,digestFile(file)]);
@@ -42,6 +48,13 @@ function inventory(root: string): string {
     }
   };
   walk(root); return canonical(rows)+'\n';
+}
+function engineIdentity(plan: DeployPlan): string {
+  return canonical([plan.host.bunPath!,plan.host.nodePath!].map(path=>{
+    const actual=realpathSync(path),st=lstatSync(actual);
+    if(!st.isFile()||!(st.mode&0o111))refuse('E_DEPLOY_ENGINE');
+    return {path,actual,digest:digestFile(actual)};
+  }))+'\n';
 }
 function expandedOptions(plan: DeployPlan, build: string) {
   const h=JSON.parse(JSON.stringify(plan.host).replaceAll('{build}',build)) as typeof plan.host;
@@ -55,7 +68,12 @@ function expandedOptions(plan: DeployPlan, build: string) {
   if(h.credentialBindings)credentialBindings(h.credentialBindings);
   return {h,install};
 }
+function privateRoles(plan: DeployPlan, build: string): string[] {
+  const {h}=expandedOptions(plan,build);
+  return [...(h.layout?[h.layout.state,h.layout.workspace,h.layout.credentials]:[]),...(h.credentialBindings?[h.credentialBindings.root]:[])];
+}
 function stageScope(recipe: Recipe): void {
+  for(const server of Object.values(recipe.mcpServers??{}))if(server.command&&!server.source)refuse('E_DEPLOY_SOURCE_MISSING');
   // Do not fetch child recipes or adopt local source/config/credential payloads
   // that the plan has not validated and digested.
   const inspect=(v:unknown):void=>{
@@ -90,6 +108,8 @@ function makeManifest(plan: DeployPlan, build: string): StagedEnvelope {
   const raw=JSON.parse(bytes);
   const owner={uid:process.geteuid!(),gid:process.getegid!()};
   const roles: Manifest['roles']=[{name:'runtime',kind:'runtime',path:install,owner},{name:'config',kind:'config',path:join(build,'.cook'),owner}];
+  const layout=expandedOptions(plan,build).h.layout;
+  if(layout)for(const kind of ['state','workspace','credentials'] as const)roles.push({name:kind,kind,path:layout[kind],owner});
   const artifacts: Manifest['artifacts']=[{name:'recipe',role:'config',path:'recipe.json',digest:digestFile(join(build,'.cook/recipe.json'))},
     {name:'tree',role:'config',path:'tree.json',digest:digestFile(join(build,'.cook/tree.json'))}];
   const roots=[raw.connectomeHost.path,...raw.components.map((c:{path:string})=>c.path),...raw.localExtensions.map((c:{path:string})=>c.path)] as string[];
@@ -101,13 +121,21 @@ function makeManifest(plan: DeployPlan, build: string): StagedEnvelope {
   const providers: Manifest['providers']=[];
   // Descriptive systemd routes cannot be installed by G3; retain their intent
   // in the plan. G3's explicit named consumer mappings are the build bindings.
-  const c=plan.host.credentialBindings;
+  const c=expandedOptions(plan,build).h.credentialBindings;
   if(c){
-    roles.push({name:'credentials',kind:'credentials',path:c.root,owner});
+    if(!roles.some(r=>r.name==='credentials'))roles.push({name:'credentials',kind:'credentials',path:c.root,owner});
     for(const [name,destination] of Object.entries(c.files))providers.push({name,required:true,consumer:profiles[0]!,role:'credentials',destination});
   }
+  for(const credential of plan.configuration.credentials) {
+    const root=dirname(credential.source);
+    let role=roles.find(r=>r.kind==='credentials'&&r.path===root);
+    if(!role){role={name:'credential-route-'+roles.length,kind:'credentials',path:root,owner};roles.push(role);}
+    if(providers.some(p=>p.name===credential.name))refuse('E_DEPLOY_BINDINGS');
+    const profile=credential.consumer.split(':')[0]!;
+    providers.push({name:credential.name,required:true,consumer:profiles.includes(profile)?profile:profiles[0]!,role:role.name,destination:relative(root,credential.source)});
+  }
   const manifest: Manifest={revision:'',profiles,roles,providers,
-    units:profiles.map(profile=>({name:plan.configuration.units[profile]!.name,scope:plan.host.userUnit?'user':'system',profile,artifacts:artifacts.map(a=>a.name),after:[]})),artifacts};
+    units:profiles.map(profile=>({name:plan.configuration.units[profile]!.name,scope:plan.host.userUnit===plan.configuration.units[profile]!.name?'user':'system',profile,artifacts:artifacts.map(a=>a.name),after:[]})),artifacts};
   const e: StagedEnvelope={schema:'connectome.deployment/v1',agent:{id:plan.host.agentId!,lineage:plan.host.lineage!},
     lifecycle:'staged-candidate',desired:{declaration:'.cook/deploy-plan.json',configDigest:hash(canonical(plan))},
     materialized:{lock:'connectome.lock',lockVersion:1,lockDigest:hash(bytes)},installed:null,running:null,manifest};
@@ -115,21 +143,24 @@ function makeManifest(plan: DeployPlan, build: string): StagedEnvelope {
 }
 function verifyBuild(plan: DeployPlan, build: string): void {
   privateDir(build);privateDir(join(build,'.cook'));
-  const stored=readFileSync(join(build,'.cook/deploy-plan.json'),'utf8');
+  if(readMetadata(join(build,'.cook/engines.json'))!==engineIdentity(plan))refuse('E_DEPLOY_ENGINE_DRIFT');
+  const stored=readMetadata(join(build,'.cook/deploy-plan.json'));
   if(stored!==canonical(plan)+'\n')refuse('E_DEPLOY_PLAN_DRIFT');
-  const envelopeBytes=readFileSync(join(build,'connectome.deployment.json'),'utf8');
+  const envelopeBytes=readMetadata(join(build,'connectome.deployment.json'));
   const e=validateStaged(parseJSON(envelopeBytes));
   if(envelopeBytes!==canonical(e)+'\n')refuse('E_DEPLOY_MANIFEST_DRIFT');
   if(!e.manifest||e.desired.configDigest!==hash(canonical(plan))||e.agent.id!==plan.host.agentId||e.agent.lineage!==plan.host.lineage)refuse('E_DEPLOY_PLAN_DRIFT');
-  const lock=materializationV1(e,readFileSync(join(build,'connectome.lock'),'utf8'));
+  const lock=materializationV1(e,readMetadata(join(build,'connectome.lock')));
   if(lock.connectomeHost.commit!==plan.host.chRef||lock.connectomeHost.url!==plan.host.chRepo)refuse('E_DEPLOY_PIN_DRIFT');
-  if(hash(canonical(parseJSON(readFileSync(join(build,'.cook/recipe.json'),'utf8'))))!==plan.recipeDigest)refuse('E_DEPLOY_RECIPE_DRIFT');
-  if(readFileSync(join(build,'.cook/tree.json'),'utf8')!==inventory(build))refuse('E_DEPLOY_TREE_DRIFT');
+  if(hash(canonical(parseJSON(readMetadata(join(build,'.cook/recipe.json')))))!==plan.recipeDigest)refuse('E_DEPLOY_RECIPE_DRIFT');
+  if(readMetadata(join(build,'.cook/tree.json'))!==inventory(build,privateRoles(plan,build)))refuse('E_DEPLOY_TREE_DRIFT');
   for(const a of e.manifest.artifacts){
     const role=e.manifest.roles.find(r=>r.name===a.role)!;const file=join(role.path,a.path);
+    if(!file.startsWith(build+'/'))refuse('E_DEPLOY_SCOPE');
     noLinks(file);const digest=lstatSync(file).isDirectory()?hash(inventory(file)):digestFile(file);
     if(digest!==a.digest)refuse('E_DEPLOY_ARTIFACT_DRIFT');
   }
+  if(canonical(e)!==canonical(makeManifest(plan,build)))refuse('E_DEPLOY_BINDING_DRIFT');
   const deps=parseHostDependencies(plan.host.hostDependencies);
   if(deps.length!==(lock.hostDependencies??[]).length||deps.some(d=>!lock.hostDependencies?.some(x=>x.name===d.name&&x.sha256===d.sha256)))refuse('E_DEPLOY_PIN_DRIFT');
 }
@@ -141,7 +172,9 @@ export function checkDeploy(plan: DeployPlan, root: string): string {
   verifyBuild(plan,p.build);return p.link;
 }
 export function stageDeploy(repo: string, slug: string, root: string): string {
-  const {plan,recipe}=readDeployRepo(repo,slug);complete(plan);stageScope(recipe);
+  const {plan,recipe}=readDeployRepo(repo,slug);complete(plan);
+  if(plan.configuration.hold)refuse('E_DEPLOY_HOLD_UNSUPPORTED');
+  stageScope(recipe);
   const p=paths(root,plan);
   for(const dir of [p.root,join(p.root,'.builds'),join(p.root,'runtimes')])provisionPrivateDirectory(dir);
   if(exists(p.link))return checkDeploy(plan,root);
@@ -153,11 +186,12 @@ export function stageDeploy(repo: string, slug: string, root: string): string {
     mkdirSync(join(p.build,'.cook'),{mode:0o700});
     write(join(p.build,'.cook/deploy-plan.json'),canonical(plan)+'\n');
     write(join(p.build,'.cook/recipe.json'),canonical(recipe)+'\n');
+    write(join(p.build,'.cook/engines.json'),engineIdentity(plan));
     installLegacy(plan,p.build);
     // A split install's lock copy must precede the closure census.
     const {install}=expandedOptions(plan,p.build);
     if(install!==p.build)write(join(p.build,'connectome.lock'),readFileSync(join(install,'connectome.lock'),'utf8'));
-    write(join(p.build,'.cook/tree.json'),inventory(p.build));
+    write(join(p.build,'.cook/tree.json'),inventory(p.build,privateRoles(plan,p.build)));
     const envelope=makeManifest(plan,p.build);
     write(join(p.build,'connectome.deployment.json'),canonical(envelope)+'\n');
     verifyBuild(plan,p.build);syncTree(p.build);
