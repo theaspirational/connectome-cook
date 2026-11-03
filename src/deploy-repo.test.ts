@@ -11,7 +11,7 @@ export function fixture() {
   const agent = { host:'fixture', user:'fixture',hold:false,layout:'legacy-support-agents',paths:{},release:'fixture',units:{main:{name:'fixture.service',exec_start:['/bin/false'],unit:{},service:{},environment:{},install:{}}},credentials:[],seed_settings:null,versions:{} };
   write('versions.yml',{runtime:'a'.repeat(40),slack:'base'});
   write('agents/fixture/agent.yml',agent);
-  write('agents/fixture/recipe.json',{name:'fixture',version:'1.0.0',agent:{name:'fixture',provider:'anthropic',model:'fixture'}});
+  write('agents/fixture/recipe.json',{name:'fixture',version:'1.0.0',agent:{systemPrompt:'Fixture',name:'fixture',provider:'anthropic',model:'fixture'}});
   return {root,dir,write,agent};
 }
 afterEach(()=>{for(const p of roots.splice(0))rmSync(p,{recursive:true,force:true});});

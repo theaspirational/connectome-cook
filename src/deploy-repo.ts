@@ -114,8 +114,11 @@ function host(v: unknown): HostConfig {
     if (!Array.isArray(h.hostDependencies)) refuse();
     parseHostDependencies(h.hostDependencies);
   }
-  if (h.layout !== undefined) hostLayout(h.layout, text(object(h.layout).runtime));
-  if (h.credentialBindings !== undefined) credentialBindings(h.credentialBindings);
+  if (h.layout !== undefined) {
+    const layout = JSON.parse(JSON.stringify(h.layout).replaceAll('{build}', '/__cook_build__'));
+    hostLayout(layout, text(object(layout).runtime));
+  }
+  if (h.credentialBindings !== undefined) credentialBindings(JSON.parse(JSON.stringify(h.credentialBindings).replaceAll('{build}', '/__cook_build__')));
   return h as HostConfig;
 }
 export interface DeployPlan {

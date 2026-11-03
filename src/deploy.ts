@@ -1,3 +1,4 @@
+import { checkDeploy, stageDeploy } from './deploy-stage.js';
 import { resolve } from 'node:path';
 import { canonical } from './candidate/schema.js';
 import { readDeployRepo, refuse } from './deploy-repo.js';
@@ -13,7 +14,8 @@ export async function deployCommand(args: string[]): Promise<number> {
     const {plan}=readDeployRepo(resolve(options['--repo']!),options['--agent']!);
     if(command==='plan'){process.stdout.write(canonical(plan)+'\n');return 0;}
     if(plan.missing.length){process.stderr.write('E_DEPLOY_MISSING: '+plan.missing.join(', ')+'\n');return 2;}
-    refuse('E_DEPLOY_UNIMPLEMENTED');
+    const candidate=command==='stage'?stageDeploy(resolve(options['--repo']!),options['--agent']!,resolve(options['--root']!)):checkDeploy(plan,resolve(options['--root']!));
+    process.stdout.write(canonical({candidate,status:'ok',activated:false,held:false})+'\n');return 0;
   } catch(error) {
     const code=error instanceof Error && /^E_DEPLOY_[A-Z_]+$/.test(error.message)?error.message:'E_DEPLOY_REFUSED';
     process.stderr.write(code+': deploy refused.\n');return 2;
