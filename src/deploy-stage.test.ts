@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { readDeployRepo } from './deploy-repo.js';
 import { checkDeploy, planId, stageDeploy } from './deploy-stage.js';
 import { exportManifest } from './candidate/manifest.js';
-import { validate } from './candidate/schema.js';
+import { canonical, validate } from './candidate/schema.js';
 let dir:string, repo:string, root:string, source:string;
 const write=(p:string,v:unknown)=>writeFileSync(p,JSON.stringify(v));
 beforeEach(()=>{
@@ -113,4 +113,12 @@ test('selected engine byte changes invalidate check and restage',()=>{
   stageDeploy(repo,'fixture',root);writeFileSync(join(dir,'node'),'#!/bin/sh\necho v22.99.0\n');
   expect(()=>checkDeploy(plan(),root)).toThrow('E_DEPLOY_ENGINE_DRIFT');
   expect(()=>stageDeploy(repo,'fixture',root)).toThrow('E_DEPLOY_ENGINE_DRIFT');
+});
+test('a resealed manifest with changed unit bindings still refuses against plan',()=>{
+  const link=stageDeploy(repo,'fixture',root),build=readlinkSync(link),file=join(build,'connectome.deployment.json');
+  const e=JSON.parse(readFileSync(file,'utf8'));e.manifest.units[0].scope='system';
+  // Revision recomputation is public metadata, not authorization to change plan bindings.
+  const {revision:_,...bindings}=e.manifest;
+  e.manifest.revision='sha256:'+createHash('sha256').update(canonical({agent:e.agent,desired:e.desired,materialized:e.materialized,bindings})).digest('hex');
+  writeFileSync(file,canonical(e)+'\n');expect(()=>checkDeploy(plan(),root)).toThrow('E_DEPLOY_BINDING_DRIFT');
 });

@@ -117,14 +117,14 @@ function makeManifest(plan: DeployPlan, build: string): StagedEnvelope {
     if(!p.startsWith(install+'/'))refuse('E_DEPLOY_SCOPE');
     artifacts.push({name:'code-'+i,role:'runtime',path:relative(install,p),digest:hash(inventory(p))});
   }
-  const profiles=Object.keys(plan.configuration.units);
+  const profiles=Object.keys(plan.configuration.units).sort();
   const providers: Manifest['providers']=[];
   // Descriptive systemd routes cannot be installed by G3; retain their intent
   // in the plan. G3's explicit named consumer mappings are the build bindings.
   const c=expandedOptions(plan,build).h.credentialBindings;
   if(c){
     if(!roles.some(r=>r.name==='credentials'))roles.push({name:'credentials',kind:'credentials',path:c.root,owner});
-    for(const [name,destination] of Object.entries(c.files))providers.push({name,required:true,consumer:profiles[0]!,role:'credentials',destination});
+    for(const [name,destination] of Object.entries(c.files).sort(([a],[b])=>a.localeCompare(b)))providers.push({name,required:true,consumer:profiles[0]!,role:'credentials',destination});
   }
   for(const credential of plan.configuration.credentials) {
     const root=dirname(credential.source);

@@ -130,11 +130,16 @@ function host(v: unknown): HostConfig {
 }
 /** Closed adapter surface; dictionary-valued env/source names are intentional.
  * This does not change the legacy recipe validator or its compatibility rules. */
+function scalars(o: Obj, fields: Record<string,'string'|'number'|'boolean'>): void {
+  for(const [key,type] of Object.entries(fields))if(o[key]!==undefined &&
+    (typeof o[key]!==type || (type==='number'&&!Number.isFinite(o[key]))))refuse();
+}
 function recipeKeys(value: unknown): void {
   const r=closed(value,['name','description','version','agent','codeExecution','mcpServers','modules','sessionNaming','requirements','extensions','services','containerTemplateFiles','containerDependsOn','containerVolumes']);
   const a=closed(r.agent,['name','provider','model','systemPrompt','maxTokens','strategy','formatter','contextBudgetTokens','thinking','cacheKeepalive','maxStreamTokens','proseRouting','cacheTtl']);
-  if(a.thinking)closed(a.thinking,['enabled','type','display','budgetTokens']);
-  if(a.cacheKeepalive)closed(a.cacheKeepalive,['enabled','refreshAfterMinutes','maxIdleHours']);
+  scalars(a,{name:'string',provider:'string',model:'string',systemPrompt:'string',maxTokens:'number',formatter:'string',contextBudgetTokens:'number',maxStreamTokens:'number',proseRouting:'string',cacheTtl:'string'});
+  if(a.thinking!==undefined)scalars(closed(a.thinking,['enabled','type','display','budgetTokens']),{enabled:'boolean',type:'string',display:'string',budgetTokens:'number'});
+  if(a.cacheKeepalive!==undefined)scalars(closed(a.cacheKeepalive,['enabled','refreshAfterMinutes','maxIdleHours']),{enabled:'boolean',refreshAfterMinutes:'number',maxIdleHours:'number'});
   if(a.strategy){
     const st=closed(a.strategy,['type','headWindowTokens','recentWindowTokens','compressionModel','maxMessageTokens','adaptiveResolution','foldingStrategy','targetChunkTokens','compressionSlackRatio','mergeThreshold','enforceBudget','overBudgetGraceRatio','maxSpeculativeL1s','summaryParticipant','compressionRecallBudgetTokens','compressionToolProseFallback','kvUnified']);
     if(st.compressionToolProseFallback)closed(st.compressionToolProseFallback,['intoTool','fromTools','minChars']);
@@ -143,10 +148,12 @@ function recipeKeys(value: unknown): void {
       if(kv.policy)closed(kv.policy,['alpha','budgetLowRatio','budgetHighRatio','budgetUnderLambda','budgetOverLambda','cacheLambda','cacheScale','cacheReadPrice','cacheWritePrice','continuityLambda','continuityScale','continuityRecencyHalfLifeTokens','continuityRecencyFloor','continuityStableHalfLife','continuityStableFloor']);
     }
   }
-  if(r.codeExecution)closed(r.codeExecution,['enabled']);
+  if(r.codeExecution!==undefined)scalars(closed(r.codeExecution,['enabled']),{enabled:'boolean'});
   if(r.sessionNaming)closed(r.sessionNaming,['examples']);
   for(const server of Object.values(object(r.mcpServers??{}))){
     const m=closed(server,['command','args','env','url','transport','token','toolPrefix','enabledFeatureSets','disabledFeatureSets','enabledTools','disabledTools','reconnect','reconnectIntervalMs','channelSubscription','source','sourceMeta','credentialFiles','inheritEnv','requestTimeoutMs','enabledCapabilities','disabledCapabilities']);
+    scalars(m,{command:'string',url:'string',transport:'string',token:'string',toolPrefix:'string',reconnect:'boolean',reconnectIntervalMs:'number',inheritEnv:'boolean',requestTimeoutMs:'number'});
+    for(const key of ['args','enabledFeatureSets','disabledFeatureSets','enabledTools','disabledTools','enabledCapabilities','disabledCapabilities'])if(m[key]!==undefined&&(!Array.isArray(m[key])||!(m[key] as unknown[]).every(x=>typeof x==='string')))refuse();
     if(m.credentialFiles!==undefined)refuse('E_DEPLOY_SCOPE');
     if(m.env)strings(m.env);
     for(const key of ['source','sourceMeta'])if(m[key]){
@@ -198,6 +205,7 @@ export function readDeployRepo(repo: string, slug: string): { plan: DeployPlan; 
   const recipe = validateRecipe(expand(rawRecipe, effective));
   const rawHost=exists(join(dir,'host.yml'))?read(join(dir,'host.yml')):{};
   const h = host(expand(rawHost,effective));
+  if(h.userUnit&&!Object.values(a.units).some(u=>u.name===h.userUnit))refuse('E_DEPLOY_BINDINGS');
   const missing = ['chRepo','chRef','bunPath','nodePath','hostDependencies','agentId','lineage'].filter(k => !Object.hasOwn(h,k));
   for(const key of Object.keys(overrides))if(!JSON.stringify([rawRecipe,rawHost]).includes('{'+key+'}'))missing.push('versions.'+key+'.binding');
   const plan: DeployPlan = { schema:'connectome.deploy-plan/v1', agent:slug,
