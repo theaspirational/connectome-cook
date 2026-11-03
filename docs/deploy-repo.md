@@ -179,12 +179,21 @@ out of scope for this slice.
 The deploy adapter validates every supported recipe value before calling the
 legacy validator: closed objects, typed dictionaries/arrays, booleans, strings,
 and explicit union branches (including channel subscriptions and module options).
-Tokens/counts/timeouts are safe integers with nonnegative or positive bounds as
-appropriate; ratios/floors are in [0,1], scales and refresh intervals are positive,
-and prices/weights are finite and nonnegative. Built-in strategy types, transports,
-install runtimes, mount modes/watch events and subscription modes are enums.
-Runtime-defined selector strings (for example model, formatter, thinking display
-and folding strategy) are type-checked strings, not a claim of runtime support.
+Numeric/enum domains follow connectome-host `925e4f70:src/recipe.ts`, not
+field-name heuristics. For example, kv policy alpha is a finite nonnegative
+weight (no upper bound); half-lives are positive fractions or integers; request
+timeouts are finite nonnegative numbers, including zero. Only fields explicitly
+bounded by the host impose integer/range constraints. Number-only host slots
+remain type-only, with finite JSON wire values required by the existing decoder.
+Budget low/high ratios obey `0 <= low <= high <= 1`; refresh intervals must be
+below the selected cache TTL; enabled thinking budgets must be below maxTokens.
+Explicit host enums cover built-in strategy types, folding/thinking modes,
+cache TTL/prose routing, transports, source install runtimes, mount/watch events
+and subscription modes. Omitted strategy type retains the host default.
+Cook-only `sourceMeta` provenance has closed value types but no host install enum;
+it is not acquired or executed. Models/formatters remain typed selectors, not a
+claim of runtime capability. Every numeric domain and enum is enumerated with
+host source lines and real-CLI boundary tests in `deploy-recipe-schema.test.ts`.
 Unsupported structures or unknown nested fields fail with a sanitized diagnostic;
 the permissive legacy recipe validator cannot grant deploy admission.
 Private deploy metadata (the envelope, copied lock and `.cook` JSON records) is
