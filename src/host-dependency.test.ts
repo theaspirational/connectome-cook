@@ -73,7 +73,7 @@ test('CLI installs the artifact version offline, previews and records direct/ove
   expect(lock.version).toBe(1); expect(lock.connectomeHost.commit).toBe(commit);
   expect(d).toEqual({ name: 'fixture-local-input', originalRange: '^1.0.0', version: '1.2.3', sha256: digest, size: statSync(archive).size, snapshot: d.snapshot,
     packageJsonDelta: { direct: { section: 'dependencies', name: 'fixture-local-input', before: '^1.0.0', after: 'file:' + d.snapshot }, override: { section: 'overrides', name: 'fixture-local-input', before: null, after: 'file:' + d.snapshot } },
-    installedCopies: [{ path: join(out, 'app/node_modules/fixture-local-input'), version: '1.2.3' }], duplicateCount: 0 });
+    installedCopies: [{ path: join(out, 'app/node_modules/fixture-local-input'), version: '1.2.3' }], duplicateCount: 0, censusStatus: 'complete', censusSkippedEntries: [] });
   expect(d.snapshot).toBe(join(out, 'host-inputs', digest + '.tgz'));
   expect(r.stdout).toContain(`REPLACE dependency fixture-local-input ^1.0.0 → file:${d.snapshot} (sha256 ${digest.slice(0, 12)}…) + same-name override`);
   expect(d.snapshot).not.toBe(archive); expect(statSync(d.snapshot).mode & 0o777).toBe(0o400);
@@ -266,7 +266,7 @@ test('installed-copy census reports scoped and nested duplicates without validat
 test('reused durable snapshots are rehashed before checkout mutation', () => {
   expect(install().status).toBe(0);
   const snapshot = join(out, 'host-inputs', digest + '.tgz');
-  chmodSync(snapshot, 0o600); writeFileSync(snapshot, 'tampered'); chmodSync(snapshot, 0o400);
+  chmodSync(snapshot, 0o600); writeFileSync(snapshot, Buffer.alloc(statSync(snapshot).size)); chmodSync(snapshot, 0o400);
   const result = install(); expect(result.status).not.toBe(0); expect(result.stderr).toContain('E_HOST_DEPENDENCY_HASH');
   expect(existsSync(snapshot)).toBe(true); // Existing rollback artifacts are not deleted.
   expect(existsSync(join(out, 'app/node_modules/fixture-local-input/package.json'))).toBe(true);
@@ -277,4 +277,35 @@ test('recipe writes cannot overlap durable host inputs', () => {
   writeFileSync(recipe, JSON.stringify({ name: 'Synthetic', agent: { systemPrompt: 'Test' }, containerTemplateFiles: [{ hostPath: 'collision', inContainer: '/host-inputs/collision', template: 'conflict' }] }));
   refused('E_HOST_DEPENDENCY_SOURCE');
   expect(readdirSync(join(dir, 'staging'))).toEqual([]);
+});
+
+for (const kind of ['scope-file', 'bad-manifest']) test(`best-effort census notes ${kind} without failing a successful install`, () => {
+  const mutation = kind === 'scope-file'
+    ? "printf stray > node_modules/@stray"
+    : "mkdir -p node_modules/broken; printf '{' > node_modules/broken/package.json";
+  writeFileSync(join(shim, 'bun'), `#!/bin/sh\n'${realBun}' "$@" --offline || exit $?\n${mutation}\n`);
+  expect(install().status).toBe(0);
+  const record = JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf8')).hostDependencies[0];
+  const skipped = kind === 'scope-file' ? join(out, 'app/node_modules/@stray') : join(out, 'app/node_modules/broken/package.json');
+  expect(record.censusStatus).toBe('incomplete');
+  expect(record.duplicateCount).toBeNull();
+  expect(record.censusSkippedEntries).toContainEqual({ path: skipped, reason: kind === 'scope-file' ? 'scope entry is not a directory' : 'manifest is unreadable or unparsable' });
+  expect(record.installedCopies).toEqual([{ path: join(out, 'app/node_modules/fixture-local-input'), version: '1.2.3' }]);
+  expect(existsSync(record.snapshot)).toBe(true);
+});
+for (const value of ['fixture-local-input', { 'fixture-local-input': true }, ['fixture-local-input', 123]]) test(`malformed trustedDependencies ${JSON.stringify(value)} refuses before output`, () => {
+  const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')); pkg.trustedDependencies = value;
+  writeFileSync(join(repo, 'package.json'), JSON.stringify(pkg)); git(['commit', '-am', 'Malformed trusted dependencies']);
+  refused('E_HOST_DEPENDENCY_TRUSTED');
+  expect(readdirSync(join(dir, 'staging'))).toEqual([]);
+});
+for (const reason of ['mode', 'size']) test(`retained snapshot ${reason} refusal identifies the path and reason without damaging the install`, () => {
+  expect(install().status).toBe(0);
+  const snapshot = join(out, 'host-inputs', digest + '.tgz');
+  chmodSync(snapshot, 0o600);
+  if (reason === 'size') { writeFileSync(snapshot, 'short'); chmodSync(snapshot, 0o400); }
+  const result = install(); expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain(`E_HOST_DEPENDENCY_FILE: retained input ${snapshot} rejected: ${reason}`);
+  expect(existsSync(join(out, 'app/node_modules/fixture-local-input/package.json'))).toBe(true);
+  expect(existsSync(snapshot)).toBe(true);
 });

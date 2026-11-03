@@ -14,8 +14,10 @@ must be absolute local regular files, not URLs, symlinks or directories. The
 name must exist in the acquired host's original `dependencies`,
 `devDependencies` or `optionalDependencies`. Multiple declarations of the same
 name, or a same-name `overrides`/`resolutions` entry, refuse as ambiguous.
-Names listed in `trustedDependencies` refuse with `E_HOST_DEPENDENCY_TRUSTED`:
-this prevents silently opting an input into host-declared lifecycle trust.
+Names listed in `trustedDependencies` refuse with `E_HOST_DEPENDENCY_TRUSTED`,
+as does a present value that is not an array of strings. Preflight and checkout
+use the same validation. This prevents silently opting an input into host-declared
+lifecycle trust.
 Peer-only declarations are not direct install inputs. The original range must
 be a nonempty semver range: workspace, Git, file, link, npm aliases and URLs
 refuse. The archive's `package/package.json` name must match, and its version
@@ -42,7 +44,8 @@ verified input into `<installDir>/host-inputs/<sha256>.tgz` (0700 directory,
 0400 file). With split layout, installDir is the runtime root, not the config,
 state or workspace root. Temporary staging is removed before installation.
 An existing hash-named snapshot is reused only after its ownership, mode,
-size and hash are checked.
+size and hash are checked. Rejections for retained-input owner, mode or size
+identify the snapshot path and reason, distinct from source-file failures.
 
 Immediately before `bun install`, cook writes two explicit package.json edits:
 
@@ -67,8 +70,14 @@ The host commit remains in `connectomeHost.commit`. After install, each record
 also includes `installedCopies` (package directory path and observed version for
 each copy in the installed node_modules package tree, including scoped/nested
 packages and package links), and `duplicateCount` (copies beyond the first, or
-zero). Bun may hoist/deduplicate the same-name override. This is an observed
+zero for a complete census). Bun may hoist/deduplicate the same-name override. This is an observed
 census for operator identity checks, not compatibility or content attestation.
+The census is best-effort: unreadable/unparsable manifests, non-directory scope
+entries and unscannable directories are skipped, not install failures. Each
+record includes `censusStatus` and `censusSkippedEntries` (paths and reasons).
+If anything was skipped, status is `incomplete` and `duplicateCount` is null
+(unknown), never a clean zero. Only a complete walk has status `complete` and a
+numeric duplicate count; partial installed-copy observations remain available.
 Installs with inputs rebuild the host; removing the option also forces a fresh
 host checkout and removes the direct rewrite and override from that checkout.
 
