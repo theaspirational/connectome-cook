@@ -1,7 +1,7 @@
 /** Stable private build paths, publication by atomic symlink only. No activation. */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, fchmodSync, openSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canonical, hash, parseJSON, validateStaged, type Manifest, type StagedEnvelope } from './candidate/schema.js';
@@ -20,10 +20,18 @@ function paths(root: string, plan: DeployPlan) {
   return {root,id,build:join(root,'.builds',id),link:join(root,'runtimes',id)};
 }
 function complete(plan: DeployPlan): void { if(plan.missing.length)refuse('E_DEPLOY_MISSING'); }
-function write(path: string, value: string): void { writeFileSync(path,value,{mode:0o600,flag:'wx'}); }
-function readMetadata(path: string): string {
+function write(path: string, value: string): void {
+  const fd=openSync(path,'wx',0o600);
+  try { fchmodSync(fd,0o600); writeFileSync(fd,value); }
+  finally { closeSync(fd); }
+}
+function metadataFile(path: string): void {
   noLinks(path); const st=lstatSync(path);
   if(!st.isFile()||st.nlink!==1||st.uid!==process.geteuid?.()||st.size>16*1024*1024)refuse('E_DEPLOY_FILE');
+  if((st.mode&0o7777)!==0o600)refuse('E_DEPLOY_MODE');
+}
+function readMetadata(path: string): string {
+  metadataFile(path);
   return readFileSync(path,'utf8');
 }
 function digestFile(path: string): string { return 'sha256:'+createHash('sha256').update(readFileSync(path)).digest('hex'); }
@@ -143,6 +151,10 @@ function makeManifest(plan: DeployPlan, build: string): StagedEnvelope {
 }
 function verifyBuild(plan: DeployPlan, build: string): void {
   privateDir(build);privateDir(join(build,'.cook'));
+  for(const name of readdirSync(join(build,'.cook'))){
+    if(!['deploy-plan.json','recipe.json','engines.json','tree.json','layout.json','credentialBindings.json'].includes(name))refuse('E_DEPLOY_FILE');
+    metadataFile(join(build,'.cook',name));
+  }
   if(readMetadata(join(build,'.cook/engines.json'))!==engineIdentity(plan))refuse('E_DEPLOY_ENGINE_DRIFT');
   const stored=readMetadata(join(build,'.cook/deploy-plan.json'));
   if(stored!==canonical(plan)+'\n')refuse('E_DEPLOY_PLAN_DRIFT');

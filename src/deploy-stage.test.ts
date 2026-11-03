@@ -122,3 +122,16 @@ test('a resealed manifest with changed unit bindings still refuses against plan'
   e.manifest.revision='sha256:'+createHash('sha256').update(canonical({agent:e.agent,desired:e.desired,materialized:e.materialized,bindings})).digest('hex');
   writeFileSync(file,canonical(e)+'\n');expect(()=>checkDeploy(plan(),root)).toThrow('E_DEPLOY_BINDING_DRIFT');
 });
+test('all private metadata is written 0600 and check rejects mode tampering',()=>{
+  const build=readlinkSync(stageDeploy(repo,'fixture',root));
+  const files=['connectome.deployment.json','connectome.lock',...readdirSync(join(build,'.cook')).map(n=>'.cook/'+n)];
+  for(const file of files){
+    const path=join(build,file);expect(lstatSync(path).mode&0o7777).toBe(0o600);
+    for(const mode of [0o666,0o644,0o400,0o1600]){
+      chmodSync(path,mode);expect(()=>checkDeploy(plan(),root)).toThrow('E_DEPLOY_MODE');
+      expect(()=>stageDeploy(repo,'fixture',root)).toThrow('E_DEPLOY_MODE');
+      chmodSync(path,0o600);
+    }
+  }
+  expect(checkDeploy(plan(),root)).toBe(join(root,'runtimes',planId(plan())));
+});

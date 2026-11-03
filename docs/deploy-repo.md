@@ -187,3 +187,7 @@ Runtime-defined selector strings (for example model, formatter, thinking display
 and folding strategy) are type-checked strings, not a claim of runtime support.
 Unsupported structures or unknown nested fields fail with a sanitized diagnostic;
 the permissive legacy recipe validator cannot grant deploy admission.
+Private deploy metadata (the envelope, copied lock and `.cook` JSON records) is
+created as exactly 0600 using the newly owned file descriptor, independent of
+umask, and check requires that exact mode (including absence of special bits).
+This does not change the legacy installer's own materialization-file contract.
