@@ -5,7 +5,7 @@ import { validate, validateDeployment, validateStaged, parseJSON } from './candi
 import { materializationV1 } from './candidate/manifest.js';
 const root = join(import.meta.dir, '../test/fixtures/deployment-v1');
 const held = validate('connectome.deployment/v1', parseJSON(readFileSync(join(root, 'envelope.json'), 'utf8')));
-const staged = { ...held, lifecycle: 'staged-candidate', desired: { ...held.desired, declaration: '.cook/deploy-plan.json' } };
+const staged = { ...held, lifecycle: 'staged-candidate' as const, desired: { ...held.desired, declaration: '.cook/deploy-plan.json' as const } };
 test('deployment readers distinguish staged and held, refusing cross acceptance and unknown lifecycles', () => {
   expect(validateDeployment(held)).toEqual(held);
   expect(validateStaged(JSON.parse(JSON.stringify(staged)))).toEqual(staged);
