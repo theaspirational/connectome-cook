@@ -21,6 +21,27 @@ export interface Envelope {
   installed: null; running: null; lifecycle: 'held-candidate';
   manifest?: Manifest;
 }
+/** Deploy stages are not held; held-only validate/readRecord remain unchanged. */
+export interface StagedEnvelope extends Omit<Envelope, 'lifecycle' | 'desired'> {
+  lifecycle: 'staged-candidate';
+  desired: { declaration: '.cook/deploy-plan.json'; configDigest: string };
+}
+export type DeploymentEnvelope = Envelope | StagedEnvelope;
+export function validateDeployment(value: unknown): DeploymentEnvelope {
+  if (value && typeof value === 'object' && (value as StagedEnvelope).lifecycle === 'staged-candidate') {
+    const e = value as StagedEnvelope;
+    if (e.desired?.declaration !== '.cook/deploy-plan.json') fail('E_SCHEMA');
+    validate('connectome.deployment/v1', { ...e, lifecycle: 'held-candidate',
+      desired: { ...e.desired, declaration: '.cook/declaration.json' } });
+    return e;
+  }
+  return validate('connectome.deployment/v1', value);
+}
+export function validateStaged(value: unknown): StagedEnvelope {
+  const e = validateDeployment(value);
+  if (e.lifecycle !== 'staged-candidate') fail('E_SCHEMA');
+  return e;
+}
 export type RoleKind = 'config' | 'runtime' | 'state' | 'workspace' | 'credentials';
 export interface Manifest {
   configRevision?: string | null; revision: string; profiles: string[];

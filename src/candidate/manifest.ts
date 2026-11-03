@@ -4,10 +4,10 @@ import { readFileSync } from 'node:fs';
 import type { Lockfile } from '../lockfile.js';
 import { assertCredentialFreeSourceUrl } from '../source-url.js';
 import { validateLock } from './lockfile.js';
-import { CandidateError, canonical, fail, hash, parseJSON, validate, type Envelope, type Manifest } from './schema.js';
+import { CandidateError, canonical, fail, hash, parseJSON, validate, validateDeployment, type DeploymentEnvelope, type Envelope, type Manifest } from './schema.js';
 
 /** Declared code/config/bindings only, including an optional config revision. */
-export function deploymentRevision(e: Envelope): string {
+export function deploymentRevision(e: DeploymentEnvelope): string {
   if (!e.manifest) return fail('E_SCHEMA');
   const { revision: _revision, ...bindings } = e.manifest;
   return hash(canonical({ agent: e.agent, desired: e.desired, materialized: e.materialized, bindings }));
@@ -16,7 +16,7 @@ export function deploymentRevision(e: Envelope): string {
 /** Adapt either envelope shape to the unchanged host materialization v1 reader.
  * Legacy records remain legacy; no missing deployment bindings are invented. */
 export function materializationV1(value: unknown, lockBytes: string): Lockfile {
-  const e = validate('connectome.deployment/v1', value);
+  const e = validateDeployment(value);
   if (e.manifest && e.manifest.revision !== deploymentRevision(e)) fail('E_DIGEST');
   if (hash(lockBytes) !== e.materialized.lockDigest) fail('E_DIGEST');
   const lock = validateLock(parseJSON(lockBytes));
@@ -50,7 +50,7 @@ export function extendEnvelope(value: unknown, lockBytes: string, bindings: Omit
 }
 
 export function exportManifest(value: unknown, lockBytes: string): string {
-  const e = validate('connectome.deployment/v1', value);
+  const e = validateDeployment(value);
   if (!e.manifest) fail('E_PROOF_INCOMPLETE');
   materializationV1(e, lockBytes);
   return canonical(e) + '\n';
