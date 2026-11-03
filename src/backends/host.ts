@@ -1,3 +1,4 @@
+import { applyHostDependencies, parseHostDependencies, preflightHostDependencies, type LockedHostDependency } from '../host-dependency.js';
 import { guard, noLinks, publish, syncDir, syncTree } from '../candidate/io.js';
 import { canonical, fail } from '../candidate/schema.js';
 /**
@@ -73,6 +74,8 @@ import type { BuildResult } from './docker.js';
 export interface HostBackendOptions {
   /** Internal held-candidate preparation; CLI cannot bypass the hold guard. */
   candidate?: boolean;
+  /** Repeatable name=absolute-archive#sha256=hex inputs (legacy only). */
+  hostDependencies?: string[];
   /** Export a static user unit under the installation; never install/start it. */
   userUnit?: string;
   /** Opt-in separate configuration, runtime, state, workspace and credential roots. */
@@ -289,7 +292,7 @@ function buildEnvironment(plan: InstallPlan): NodeJS.ProcessEnv {
 
 /** Execute one clone+build action. Throws on failure; the caller removes
  *  the target on failure so no half-built checkout survives. */
-function executeClone(action: CloneAction, buildEnv: NodeJS.ProcessEnv, quiet = false): { commit?: string } {
+function executeClone(action: CloneAction, buildEnv: NodeJS.ProcessEnv, quiet = false, dependencies?: LockedHostDependency[]): { commit?: string } {
   rmSync(action.target, { recursive: true, force: true });
   mkdirSync(resolve(action.target, '..'), { recursive: true });
 
@@ -334,6 +337,7 @@ function executeClone(action: CloneAction, buildEnv: NodeJS.ProcessEnv, quiet = 
     // Non-fatal — lock entry just omits the commit.
   }
 
+  if (dependencies?.length) applyHostDependencies(action.target, dependencies);
   if (action.buildCommand) {
     log.step(`building ${log.dim(action.target)}: ${action.buildCommand}`);
     execSync(action.buildCommand, {
@@ -484,6 +488,8 @@ export async function runHostBackend(
 ): Promise<BuildResult> {
   const installDir = options.installDir;
   if (!options.candidate) guard(installDir);
+  if (options.candidate && options.hostDependencies !== undefined) throw new Error('E_HELD: host dependencies require legacy install');
+  const dependencyInputs = parseHostDependencies(options.hostDependencies);
   const layout = options.layout === undefined ? undefined : hostLayout(options.layout, installDir);
   if (layout) {
     if (options.candidate || !options.bunPath || !options.nodePath) throw new Error('E_HOST_LAYOUT: selected engines and legacy install required');
@@ -546,6 +552,10 @@ export async function runHostBackend(
     engines = checked.engines;
     options = { ...options, chCommit: checked.commit };
   }
+  const dependencies = dependencyInputs.length ? preflightHostDependencies(options.chRepoUrl, options.chCommit ?? options.chRef, dependencyInputs) : undefined;
+  if (dependencies) options = { ...options, chCommit: dependencies.commit };
+  let keepSnapshots = false;
+  try {
   const buildEnv = buildEnvironment(plan);
   if (engines) buildEnv.PATH = hostBuildPath(engines, buildEnv.PATH);
   const parent = plan.parentWalk.recipe;
@@ -639,14 +649,14 @@ export async function runHostBackend(
   let chCommit: string | undefined;
   for (const action of actions.clones) {
     let commit: string | undefined;
-    if (isSatisfiedByLock(action, existingLock)) {
+    if (!(action.role === 'connectome-host' && (dependencies || existingLock?.hostDependencies?.length)) && isSatisfiedByLock(action, existingLock)) {
       log.info(`unchanged ${log.dim(action.key)} — kept (${log.dim(action.target)})`);
       commit = action.role === 'connectome-host'
         ? existingLock!.connectomeHost.commit
         : existingLock!.components.find((c) => c.key === action.key)?.commit;
     } else {
       try {
-        commit = executeClone(action, buildEnv, options.candidate).commit;
+        commit = executeClone(action, buildEnv, options.candidate, action.role === 'connectome-host' ? dependencies?.records : undefined).commit;
       } catch (err) {
         log.error(
           `install of ${action.key} failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -859,6 +869,7 @@ export async function runHostBackend(
     const lock: Lockfile = {
       version: 1,
       backend: 'host',
+      ...(dependencies ? { hostDependencies: dependencies.records } : {}),
       ...(engines ? { engines } : {}),
       ...(layout ? { layout } : {}),
       ...(credentials ? { credentials } : {}),
@@ -895,5 +906,7 @@ export async function runHostBackend(
   log.success(`host install complete → ${installDir}`);
   log.info('');
   log.info(`Next: ${log.bold(`${join(installDir, 'run.sh')}`)}`);
+  keepSnapshots = true;
   return { exitCode: 0, outDir: installDir };
+  } finally { if (!keepSnapshots) dependencies?.cleanup(); }
 }

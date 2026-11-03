@@ -184,6 +184,7 @@ ${log.bold('Flags:')}
                          references render as empty (default: refuse)
   --env-file <path>      Read variable values from this file before prompting
   --ch-repo <url>        connectome-host repo (default: ${DEFAULT_CH_REPO_URL})
+  --host-dependency <name>=<abs-path>#sha256=<hex> Repeatable local archive input
   --credential-bindings <local-json> File-to-stdio env adapters (selected engines)
   --layout <local-json>  Opt-in split roots and explicit connector-state mappings
   --user-unit <name.service> Export a user unit only (requires selected engines)
@@ -197,7 +198,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   if (argv.some(a => a === '--hold' || a.startsWith('--hold='))) return candidateCommand('prepare', argv);
   const flags = mri(argv, {
     boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates'],
-    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit', 'layout', 'credential-bindings'],
+    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit', 'layout', 'credential-bindings', 'host-dependency'],
     alias: { h: 'help' },
   });
 
@@ -261,6 +262,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   );
   const result = await runHostBackend(planResult.plan, {
     installDir,
+    hostDependencies: flags['host-dependency'],
     credentials: flags['credential-bindings'] ? readCredentialBindings(flags['credential-bindings']) : undefined,
     layout: flags.layout ? hostLayout(JSON.parse(readFileSync(flags.layout, 'utf8')), installDir) : undefined,
     userUnit: flags['user-unit'],

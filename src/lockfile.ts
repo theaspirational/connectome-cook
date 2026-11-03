@@ -41,6 +41,8 @@ export interface LockedRequirement {
 
 export interface Lockfile {
   version: 1;
+  /** Hash-pinned local inputs and explicit pre-install package.json edits. */
+  hostDependencies?: import('./host-dependency.js').LockedHostDependency[];
   /** Declared credential paths and consumers only; never credential values. */
   credentials?: import('./host-credentials.js').CredentialBindings;
   /** Explicit roots and connector-state bindings for a split host install. */

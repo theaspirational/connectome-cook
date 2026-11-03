@@ -23,7 +23,8 @@
     "docs/host-engines.md",
     "docs/host-user-unit.md",
     "docs/host-layout.md",
-    "docs/host-credentials.md"
+    "docs/host-credentials.md",
+    "docs/host-dependency.md"
   ],
   "license": "Apache-2.0",
   "engines": {
