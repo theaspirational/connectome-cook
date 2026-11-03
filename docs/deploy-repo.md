@@ -173,3 +173,17 @@ provider refresh state or connector queues. Do not rewind newer state implicitly
 require an independently qualified cold restore and operator loss approval when
 needed. Unit installation, Vault, activation, switch and rollback execution remain
 out of scope for this slice.
+
+### Recipe value validation
+
+The deploy adapter validates every supported recipe value before calling the
+legacy validator: closed objects, typed dictionaries/arrays, booleans, strings,
+and explicit union branches (including channel subscriptions and module options).
+Tokens/counts/timeouts are safe integers with nonnegative or positive bounds as
+appropriate; ratios/floors are in [0,1], scales and refresh intervals are positive,
+and prices/weights are finite and nonnegative. Built-in strategy types, transports,
+install runtimes, mount modes/watch events and subscription modes are enums.
+Runtime-defined selector strings (for example model, formatter, thinking display
+and folding strategy) are type-checked strings, not a claim of runtime support.
+Unsupported structures or unknown nested fields fail with a sanitized diagnostic;
+the permissive legacy recipe validator cannot grant deploy admission.

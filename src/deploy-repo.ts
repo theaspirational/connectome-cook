@@ -1,3 +1,4 @@
+import { validateDeployRecipe } from './deploy-recipe-schema.js';
 /** Deploy declarations are JSON with optional full-line YAML comments, as in
  * connectome-agents. Never evaluate templates, open credential files or fetch. */
 import { lstatSync, readFileSync } from 'node:fs';
@@ -128,58 +129,6 @@ function host(v: unknown): HostConfig {
   if (h.credentialBindings !== undefined) credentialBindings(JSON.parse(JSON.stringify(h.credentialBindings).replaceAll('{build}', '/__cook_build__')));
   return h as HostConfig;
 }
-/** Closed adapter surface; dictionary-valued env/source names are intentional.
- * This does not change the legacy recipe validator or its compatibility rules. */
-function scalars(o: Obj, fields: Record<string,'string'|'number'|'boolean'>): void {
-  for(const [key,type] of Object.entries(fields))if(o[key]!==undefined &&
-    (typeof o[key]!==type || (type==='number'&&!Number.isFinite(o[key]))))refuse();
-}
-function recipeKeys(value: unknown): void {
-  const r=closed(value,['name','description','version','agent','codeExecution','mcpServers','modules','sessionNaming','requirements','extensions','services','containerTemplateFiles','containerDependsOn','containerVolumes']);
-  const a=closed(r.agent,['name','provider','model','systemPrompt','maxTokens','strategy','formatter','contextBudgetTokens','thinking','cacheKeepalive','maxStreamTokens','proseRouting','cacheTtl']);
-  scalars(a,{name:'string',provider:'string',model:'string',systemPrompt:'string',maxTokens:'number',formatter:'string',contextBudgetTokens:'number',maxStreamTokens:'number',proseRouting:'string',cacheTtl:'string'});
-  if(a.thinking!==undefined)scalars(closed(a.thinking,['enabled','type','display','budgetTokens']),{enabled:'boolean',type:'string',display:'string',budgetTokens:'number'});
-  if(a.cacheKeepalive!==undefined)scalars(closed(a.cacheKeepalive,['enabled','refreshAfterMinutes','maxIdleHours']),{enabled:'boolean',refreshAfterMinutes:'number',maxIdleHours:'number'});
-  if(a.strategy){
-    const st=closed(a.strategy,['type','headWindowTokens','recentWindowTokens','compressionModel','maxMessageTokens','adaptiveResolution','foldingStrategy','targetChunkTokens','compressionSlackRatio','mergeThreshold','enforceBudget','overBudgetGraceRatio','maxSpeculativeL1s','summaryParticipant','compressionRecallBudgetTokens','compressionToolProseFallback','kvUnified']);
-    if(st.compressionToolProseFallback)closed(st.compressionToolProseFallback,['intoTool','fromTools','minChars']);
-    if(st.kvUnified){
-      const kv=closed(st.kvUnified,['policy','tokenBucketSize','continuityBucketSize','fidelityBucketSize','labelCeiling','adoptEpsilon','treeifyNonContiguousSummaries','preserveGapBearingSummaries','hysteresisCertificate']);
-      if(kv.policy)closed(kv.policy,['alpha','budgetLowRatio','budgetHighRatio','budgetUnderLambda','budgetOverLambda','cacheLambda','cacheScale','cacheReadPrice','cacheWritePrice','continuityLambda','continuityScale','continuityRecencyHalfLifeTokens','continuityRecencyFloor','continuityStableHalfLife','continuityStableFloor']);
-    }
-  }
-  if(r.codeExecution!==undefined)scalars(closed(r.codeExecution,['enabled']),{enabled:'boolean'});
-  if(r.sessionNaming)closed(r.sessionNaming,['examples']);
-  for(const server of Object.values(object(r.mcpServers??{}))){
-    const m=closed(server,['command','args','env','url','transport','token','toolPrefix','enabledFeatureSets','disabledFeatureSets','enabledTools','disabledTools','reconnect','reconnectIntervalMs','channelSubscription','source','sourceMeta','credentialFiles','inheritEnv','requestTimeoutMs','enabledCapabilities','disabledCapabilities']);
-    scalars(m,{command:'string',url:'string',transport:'string',token:'string',toolPrefix:'string',reconnect:'boolean',reconnectIntervalMs:'number',inheritEnv:'boolean',requestTimeoutMs:'number'});
-    for(const key of ['args','enabledFeatureSets','disabledFeatureSets','enabledTools','disabledTools','enabledCapabilities','disabledCapabilities'])if(m[key]!==undefined&&(!Array.isArray(m[key])||!(m[key] as unknown[]).every(x=>typeof x==='string')))refuse();
-    if(m.credentialFiles!==undefined)refuse('E_DEPLOY_SCOPE');
-    if(m.env)strings(m.env);
-    for(const key of ['source','sourceMeta'])if(m[key]){
-      const source=closed(m[key],['url','ref','install','authSecret','sslBypass','inContainer','systemPackages','npm']);
-      if(source.url)assertCredentialFreeSourceUrl(text(source.url));
-      if(source.install&&typeof source.install==='object')closed(source.install,['run','runtime']);
-      if(source.inContainer)closed(source.inContainer,['path']);
-    }
-  }
-  if(r.modules){
-    const m=closed(r.modules,['subagents','lessons','retrieval','wake','workspace','activity','fleet','webui','mcplAdmin','identity','history','notices','instructions','subscriptionGc','channelMode']);
-    for(const [key,v] of Object.entries(m))if(typeof v!=='boolean'){
-      if(key==='workspace'){
-        const w=closed(v,['mounts','configMount']);
-        if(!Array.isArray(w.mounts))refuse();
-        for(const mount of w.mounts as unknown[])closed(mount,['name','path','mode','watch','ignore','wakeOnChange','autoMaterialize']);
-      } else if(key==='subagents')closed(v,['defaultModel','defaultMaxTokens']);
-      else if(key==='retrieval')closed(v,['model','maxInjected']);
-      else if(key==='activity')closed(v,['channels']);
-      else refuse(); // opaque module configuration needs an explicit adapter
-    }
-  }
-  // These legacy build-time surfaces would read unplanned inputs or write
-  // private configuration. Refuse rather than silently weaken strictness.
-  for(const k of ['requirements','extensions','services','containerTemplateFiles','containerDependsOn','containerVolumes'])if(r[k]!==undefined)refuse('E_DEPLOY_SCOPE');
-}
 export interface DeployPlan {
   schema: 'connectome.deploy-plan/v1'; agent: string;
   effectivePins: Record<string, { value: string; source: 'base' | 'override' }>;
@@ -201,7 +150,7 @@ export function readDeployRepo(repo: string, slug: string): { plan: DeployPlan; 
   const overrides = a.versions ?? {};
   if (Object.keys(overrides).some(k => !Object.hasOwn(base,k))) refuse();
   const effective = { ...base, ...overrides };
-  const rawRecipe = read(join(dir, 'recipe.json')); secretFree(rawRecipe); recipeKeys(rawRecipe);
+  const rawRecipe = read(join(dir, 'recipe.json')); secretFree(rawRecipe); validateDeployRecipe(rawRecipe);
   const recipe = validateRecipe(expand(rawRecipe, effective));
   const rawHost=exists(join(dir,'host.yml'))?read(join(dir,'host.yml')):{};
   const h = host(expand(rawHost,effective));
