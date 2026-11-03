@@ -93,17 +93,13 @@ test('existing current is not changed and runtime link tampering is detected',()
   expect(readlinkSync(join(root,'current'))).toBe('/nonexistent/retained');
   rmSync(link);symlinkSync(source,link);expect(()=>checkDeploy(plan(),root)).toThrow('E_DEPLOY_LINK');
 });
-test('G1/G2/G3 split options reuse legacy install, never read credential files',()=>{
+test('G1/G2/G3 split options exclude subsequently populated private roles',()=>{
   const file=join(repo,'agents/fixture/host.yml'),h=JSON.parse(readFileSync(file,'utf8'));
-  const credentials=join(dir,'credentials');mkdirSync(credentials,{mode:0o700});
-  writeFileSync(join(credentials,'auth'), 'synthetic-private-value',{mode:0o600});
   h.layout={schema:'connectome.host-layout/v1',runtime:'{build}/runtime',config:'{build}/config',state:'{build}/state',workspace:'{build}/workspace',credentials:'{build}/credentials',connectorState:{}};
   h.credentialBindings={schema:'connectome.credential-bindings/v1',root:'{build}/credentials',files:{auth:'auth'},consumers:{local:{API_KEY:'auth'}}};
   write(file,h);write(join(repo,'agents/fixture/recipe.json'),{name:'Fixture',agent:{systemPrompt:'Fixture'},mcpServers:{local:{command:'node',args:['src/index.ts'],source:{url:source,ref:'{runtime}',install:{runtime:'custom',run:'/bin/true'}}}}});
   const link=stageDeploy(repo,'fixture',root),build=readlinkSync(link);
   expect(checkDeploy(plan(),root)).toBe(link);
-  const envelope=readFileSync(join(build,'connectome.deployment.json'),'utf8');
-  expect(envelope).not.toContain('synthetic-private-value');
   expect(existsSync(join(build,'config/recipes/recipe.json'))).toBe(true);
   // Private roles never enter closure inventories, even if later populated.
   writeFileSync(join(build,'credentials/auth'),'synthetic-private-value',{mode:0o600});
@@ -134,4 +130,30 @@ test('all private metadata is written 0600 and check rejects mode tampering',()=
     }
   }
   expect(checkDeploy(plan(),root)).toBe(join(root,'runtimes',planId(plan())));
+});
+
+test('G3 installer does not read the configured credential, including a failing read trap',()=>{
+  const file=join(repo,'agents/fixture/host.yml'),h=JSON.parse(readFileSync(file,'utf8'));
+  const credentials=join(dir,'credentials');mkdirSync(credentials,{mode:0o700});
+  const auth=join(credentials,'auth'),sentinel='synthetic-private-value-at-configured-path';
+  writeFileSync(auth,sentinel,{mode:0o600});
+  h.credentialBindings={schema:'connectome.credential-bindings/v1',root:credentials,files:{auth:'auth'},consumers:{local:{API_KEY:'auth'}}};
+  write(file,h);
+  const recipe={name:'Fixture',agent:{systemPrompt:'Fixture'},mcpServers:{local:{command:'node',args:['src/index.ts'],source:{url:source,ref:'{runtime}',install:{runtime:'custom',run:'/bin/true'}}}}};
+  write(join(repo,'agents/fixture/recipe.json'),recipe);
+  const build=readlinkSync(stageDeploy(repo,'fixture',root));
+  const assertAbsent=(path:string):void=>{
+    const st=lstatSync(path);
+    if(st.isDirectory())for(const name of readdirSync(path))assertAbsent(join(path,name));
+    else if(st.isFile())expect(readFileSync(path).includes(Buffer.from(sentinel))).toBe(false);
+  };
+  assertAbsent(build);expect(readFileSync(auth,'utf8')).toBe(sentinel);
+  // The exact configured credential becomes a directory: attempts to read its
+  // bytes fail with EISDIR, independently of uid or root permission bypass.
+  rmSync(auth);mkdirSync(auth,{mode:0o700});
+  expect(()=>readFileSync(auth,'utf8')).toThrow();
+  expect(checkDeploy(plan(),root)).toBe(join(root,'runtimes',planId(plan())));
+  // A different plan forces another real legacy install, not an idempotent hit.
+  write(join(repo,'agents/fixture/recipe.json'),{...recipe,name:'Second fixture'});
+  expect(()=>stageDeploy(repo,'fixture',root)).not.toThrow();
 });
