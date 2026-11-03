@@ -1,4 +1,4 @@
-import { applyHostDependencies, parseHostDependencies, preflightHostDependencies, type LockedHostDependency } from '../host-dependency.js';
+import { applyHostDependencies, recordInstalledHostDependencies, parseHostDependencies, preflightHostDependencies, type LockedHostDependency } from '../host-dependency.js';
 import { guard, noLinks, publish, syncDir, syncTree } from '../candidate/io.js';
 import { canonical, fail } from '../candidate/schema.js';
 /**
@@ -75,7 +75,7 @@ export interface HostBackendOptions {
   /** Internal held-candidate preparation; CLI cannot bypass the hold guard. */
   candidate?: boolean;
   /** Repeatable name=absolute-archive#sha256=hex inputs (legacy only). */
-  hostDependencies?: string[];
+  hostDependencies?: string | string[];
   /** Export a static user unit under the installation; never install/start it. */
   userUnit?: string;
   /** Opt-in separate configuration, runtime, state, workspace and credential roots. */
@@ -224,7 +224,7 @@ export function planHostActions(plan: InstallPlan, options: HostBackendOptions):
 }
 
 /** Render the confirm-gate preview. Pure (string). */
-export function renderActionPreview(actions: HostActions, options: HostBackendOptions): string {
+export function renderActionPreview(actions: HostActions, options: HostBackendOptions, dependencies: LockedHostDependency[] = []): string {
   const lines: string[] = [];
   lines.push(`Host install plan → ${options.installDir}`);
   lines.push('');
@@ -235,6 +235,7 @@ export function renderActionPreview(actions: HostActions, options: HostBackendOp
     if (c.buildCommand) lines.push(`      then run: ${c.buildCommand}`);
     if (c.authSecret) lines.push(`      (private clone: token from $${c.authSecret})`);
   }
+  for (const d of dependencies) lines.push(`  - REPLACE dependency ${d.name} ${d.originalRange} → ${d.packageJsonDelta.direct.after} (sha256 ${d.sha256.slice(0, 12)}…) + same-name override`);
   for (const c of actions.copies) {
     lines.push(`  - COPY ${c.from} → ${c.target} (sibling checkout)`);
   }
@@ -292,7 +293,7 @@ function buildEnvironment(plan: InstallPlan): NodeJS.ProcessEnv {
 
 /** Execute one clone+build action. Throws on failure; the caller removes
  *  the target on failure so no half-built checkout survives. */
-function executeClone(action: CloneAction, buildEnv: NodeJS.ProcessEnv, quiet = false, dependencies?: LockedHostDependency[]): { commit?: string } {
+function executeClone(action: CloneAction, buildEnv: NodeJS.ProcessEnv, quiet = false, dependencies?: LockedHostDependency[], onDependencyMutation?: () => void): { commit?: string } {
   rmSync(action.target, { recursive: true, force: true });
   mkdirSync(resolve(action.target, '..'), { recursive: true });
 
@@ -337,7 +338,10 @@ function executeClone(action: CloneAction, buildEnv: NodeJS.ProcessEnv, quiet = 
     // Non-fatal — lock entry just omits the commit.
   }
 
-  if (dependencies?.length) applyHostDependencies(action.target, dependencies);
+  if (dependencies?.length) {
+    applyHostDependencies(action.target, dependencies);
+    onDependencyMutation?.();
+  }
   if (action.buildCommand) {
     log.step(`building ${log.dim(action.target)}: ${action.buildCommand}`);
     execSync(action.buildCommand, {
@@ -552,9 +556,10 @@ export async function runHostBackend(
     engines = checked.engines;
     options = { ...options, chCommit: checked.commit };
   }
-  const dependencies = dependencyInputs.length ? preflightHostDependencies(options.chRepoUrl, options.chCommit ?? options.chRef, dependencyInputs) : undefined;
+  const dependencies = dependencyInputs.length ? preflightHostDependencies(options.chRepoUrl, options.chCommit ?? options.chRef, dependencyInputs, layout?.runtime ?? installDir) : undefined;
   if (dependencies) options = { ...options, chCommit: dependencies.commit };
   let keepSnapshots = false;
+  let completed = false;
   try {
   const buildEnv = buildEnvironment(plan);
   if (engines) buildEnv.PATH = hostBuildPath(engines, buildEnv.PATH);
@@ -576,6 +581,14 @@ export async function runHostBackend(
   }
 
   const actions = planHostActions(plan, options);
+  if (dependencies) {
+    const inputRoot = join(installDir, 'host-inputs');
+    const targets = [...actions.clones.map(a => a.target), ...actions.copies.map(a => a.target),
+      ...runtimeFiles.map(f => f.kind === 'sidecar-template' ? resolve(installDir, f.relPath) : hostPathFor(installDir, f.inContainer!))];
+    if (targets.some(target => target === inputRoot || target.startsWith(inputRoot + '/') || inputRoot.startsWith(target + '/'))) {
+      throw new Error('E_HOST_DEPENDENCY_SOURCE: recipe target overlaps host inputs');
+    }
+  }
   if (layout) for (const target of [...actions.clones.map(a => a.target), ...actions.copies.map(a => a.target)]) {
     const rel = relative(installDir, target);
     if (!rel || rel.startsWith('..') || /^(?:run\.sh|connectome\.lock|\.cook)(?:\/|$)/.test(rel)) throw new Error('E_HOST_LAYOUT: code target escapes runtime root');
@@ -614,7 +627,7 @@ export async function runHostBackend(
   if (engines && JSON.stringify(existingLock?.engines) !== JSON.stringify(engines)) existingLock = null;
 
   // ---- Confirm gate: commands run on the operator's machine. ----
-  if (!options.candidate) process.stdout.write(renderActionPreview(actions, options) + '\n\n');
+  if (!options.candidate) process.stdout.write(renderActionPreview(actions, options, dependencies?.records) + '\n\n');
   if (options.noPrompts) {
     if (!options.yes) {
       log.error('host install runs commands on this machine; non-interactive mode requires --yes');
@@ -639,6 +652,8 @@ export async function runHostBackend(
     mkdirSync(join(installDir, 'recipes'), { recursive: true });
   }
 
+  dependencies?.materialize();
+
   if (credentials) {
     provisionSecretFiles(credentialSecretFiles(credentials));
     provisionPrivateDirectory(adapterDir);
@@ -656,7 +671,7 @@ export async function runHostBackend(
         : existingLock!.components.find((c) => c.key === action.key)?.commit;
     } else {
       try {
-        commit = executeClone(action, buildEnv, options.candidate, action.role === 'connectome-host' ? dependencies?.records : undefined).commit;
+        commit = executeClone(action, buildEnv, options.candidate, action.role === 'connectome-host' ? dependencies?.records : undefined, () => { keepSnapshots = true; }).commit;
       } catch (err) {
         log.error(
           `install of ${action.key} failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -866,6 +881,7 @@ export async function runHostBackend(
 
     if (userUnit !== undefined) writeOutput(join(installDir, options.userUnit!), userUnit, { mode: 0o600 });
 
+    if (dependencies) recordInstalledHostDependencies(join(installDir, 'app'), dependencies.records);
     const lock: Lockfile = {
       version: 1,
       backend: 'host',
@@ -906,7 +922,14 @@ export async function runHostBackend(
   log.success(`host install complete → ${installDir}`);
   log.info('');
   log.info(`Next: ${log.bold(`${join(installDir, 'run.sh')}`)}`);
-  keepSnapshots = true;
+  completed = true;
   return { exitCode: 0, outDir: installDir };
-  } finally { if (!keepSnapshots) dependencies?.cleanup(); }
+  } finally {
+    dependencies?.cleanup();
+    if (!completed) {
+      // Never leave a surviving checkout pointing to a discarded new input.
+      if (keepSnapshots) rmSync(join(installDir, 'app'), { recursive: true, force: true });
+      dependencies?.discardNew();
+    }
+  }
 }

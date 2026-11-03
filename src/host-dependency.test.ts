@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { archivePackage } from './host-dependency.js';
+import { archivePackage, recordInstalledHostDependencies, type LockedHostDependency } from './host-dependency.js';
 
 let dir: string, repo: string, out: string, recipe: string, archive: string, digest: string, shim: string;
 const realBun = process.execPath;
@@ -34,7 +35,7 @@ function host(range: unknown = '^1.0.0', section = 'dependencies') {
 function option(name = 'fixture-local-input', path = archive, hash = digest) { return `${name}=${path}#sha256=${hash}`; }
 function install(extra: string[] = ['--host-dependency', option()]) {
   const result = spawnSync(realBun, [resolve('bin/cook'), 'install', recipe, '--out', out, '--ch-repo', repo, '--ch-ref', 'main', '--no-prompts', '--yes', ...extra], {
-    encoding: 'utf8', env: { ...process.env, PATH: shim + ':' + process.env.PATH },
+    encoding: 'utf8', env: { ...process.env, TMPDIR: join(dir, 'staging'), PATH: shim + ':' + process.env.PATH },
   });
   if (result.status === 0 && existsSync(join(out, 'connectome.lock'))) {
     const lock = JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf8'));
@@ -52,16 +53,17 @@ beforeEach(() => {
   git(['init', '-b', 'main']); git(['config', 'user.name', 'Fixture']); git(['config', 'user.email', 'fixture@example.org']); host();
   out = join(dir, 'install'); recipe = join(dir, 'recipe.json'); archive = join(dir, 'input.tgz');
   writeFileSync(recipe, JSON.stringify({ name: 'Synthetic', agent: { systemPrompt: 'Test only' } }));
+  mkdirSync(join(dir, 'staging'));
   shim = join(dir, 'bin'); mkdirSync(shim);
   // Production bun install path, forced offline for the test: no registry even on accidental fallback.
-  writeFileSync(join(shim, 'bun'), `#!/bin/sh\nexec '${realBun}' "$@" --offline\n`); chmodSync(join(shim, 'bun'), 0o755);
+  writeFileSync(join(shim, 'bun'), `#!/bin/sh\nexec env BUN_INSTALL_CACHE_DIR='${join(dir, "cache")}' '${realBun}' "$@" --offline\n`); chmodSync(join(shim, 'bun'), 0o755);
   pack();
 });
 afterEach(() => {
   for (const path of snapshots) rmSync(path, { recursive: true, force: true });
   rmSync(dir, { recursive: true, force: true });
 });
-test('CLI installs the artifact version offline, edits only its entry, records the pinned commit and explicit delta', () => {
+test('CLI installs the artifact version offline, previews and records direct/override deltas and pinned commit', () => {
   const commit = git(['rev-parse', 'HEAD']);
   const r = install(); if (r.status) console.error(r.stdout, r.stderr);
   expect(r.status).toBe(0);
@@ -70,14 +72,17 @@ test('CLI installs the artifact version offline, edits only its entry, records t
   const d = lock.hostDependencies[0];
   expect(lock.version).toBe(1); expect(lock.connectomeHost.commit).toBe(commit);
   expect(d).toEqual({ name: 'fixture-local-input', originalRange: '^1.0.0', version: '1.2.3', sha256: digest, size: statSync(archive).size, snapshot: d.snapshot,
-    packageJsonDelta: { section: 'dependencies', name: 'fixture-local-input', before: '^1.0.0', after: 'file:' + d.snapshot } });
+    packageJsonDelta: { direct: { section: 'dependencies', name: 'fixture-local-input', before: '^1.0.0', after: 'file:' + d.snapshot }, override: { section: 'overrides', name: 'fixture-local-input', before: null, after: 'file:' + d.snapshot } },
+    installedCopies: [{ path: join(out, 'app/node_modules/fixture-local-input'), version: '1.2.3' }], duplicateCount: 0 });
+  expect(d.snapshot).toBe(join(out, 'host-inputs', digest + '.tgz'));
+  expect(r.stdout).toContain(`REPLACE dependency fixture-local-input ^1.0.0 → file:${d.snapshot} (sha256 ${digest.slice(0, 12)}…) + same-name override`);
   expect(d.snapshot).not.toBe(archive); expect(statSync(d.snapshot).mode & 0o777).toBe(0o400);
   expect(statSync(dirname(d.snapshot)).mode & 0o777).toBe(0o700);
-  const original = JSON.parse(git(['show', commit + ':package.json'])); original.dependencies['fixture-local-input'] = 'file:' + d.snapshot;
+  const original = JSON.parse(git(['show', commit + ':package.json'])); original.dependencies['fixture-local-input'] = 'file:' + d.snapshot; original.overrides = { 'fixture-local-input': 'file:' + d.snapshot };
   expect(JSON.parse(readFileSync(join(out, 'app/package.json'), 'utf8'))).toEqual(original);
 });
 test('source replacement after validation cannot affect the actual offline install', () => {
-  writeFileSync(join(shim, 'bun'), `#!/bin/sh\nprintf corrupted > '${archive}'\nexec '${realBun}' "$@" --offline\n`);
+  writeFileSync(join(shim, 'bun'), `#!/bin/sh\nprintf corrupted > '${archive}'\nexec env BUN_INSTALL_CACHE_DIR='${join(dir, "cache")}' '${realBun}' "$@" --offline\n`);
   const r = install(); expect(r.status).toBe(0);
   expect(readFileSync(archive, 'utf8')).toBe('corrupted');
   expect(JSON.parse(readFileSync(join(out, 'app/node_modules/fixture-local-input/package.json'), 'utf8')).version).toBe('1.2.3');
@@ -148,7 +153,7 @@ test('reinstall with a different artifact rebuilds the host instead of keeping a
 for (const section of ['devDependencies', 'optionalDependencies']) test(`supports an original direct ${section} entry`, () => {
   host('^1', section); expect(install().status).toBe(0);
   expect(JSON.parse(readFileSync(join(out, 'app/node_modules/fixture-local-input/package.json'), 'utf8')).version).toBe('1.2.3');
-  expect(JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf8')).hostDependencies[0].packageJsonDelta.section).toBe(section);
+  expect(JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf8')).hostDependencies[0].packageJsonDelta.direct.section).toBe(section);
 });
 test('mismatch never executes package lifecycle scripts', () => {
   const marker = join(dir, 'script-ran');
@@ -170,4 +175,106 @@ test('removing the option restores original checkout rather than reusing the pac
   expect(install([]).status).toBe(0);
   expect(JSON.parse(readFileSync(join(out, 'app/package.json'), 'utf8')).dependencies).toBeUndefined();
   expect(JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf8')).hostDependencies).toBeUndefined();
+});
+
+test('durable input survives staging deletion and reinstall with an empty Bun cache', () => {
+  expect(install().status).toBe(0);
+  const snapshot = join(out, 'host-inputs', digest + '.tgz');
+  expect(readdirSync(join(dir, 'staging'))).toEqual([]);
+  rmSync(join(dir, 'staging'), { recursive: true }); rmSync(archive);
+  rmSync(join(out, 'app/node_modules'), { recursive: true });
+  expect(existsSync(snapshot)).toBe(true);
+  expect(readFileSync(join(out, 'app/bun.lock'), 'utf8')).toContain(snapshot);
+  const result = spawnSync(realBun, ['install', '--offline'], { cwd: join(out, 'app'), env: { ...process.env, BUN_INSTALL_CACHE_DIR: join(dir, 'fresh-cache') }, encoding: 'utf8' });
+  expect(result.status).toBe(0);
+  expect(JSON.parse(readFileSync(join(out, 'app/node_modules/fixture-local-input/package.json'), 'utf8')).version).toBe('1.2.3');
+});
+test('same-name transitive resolution uses the override artifact offline, and lock records the installed census', () => {
+  const wrapper = join(dir, 'wrapper.tgz');
+  writeFileSync(wrapper, gzipSync(tar([{ path: 'package/package.json', data: JSON.stringify({ name: 'synthetic-wrapper', version: '1.0.0', dependencies: { 'fixture-local-input': '^9.0.0' } }) }])));
+  const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')); pkg.dependencies['synthetic-wrapper'] = 'file:' + wrapper;
+  writeFileSync(join(repo, 'package.json'), JSON.stringify(pkg)); git(['commit', '-am', 'Transitive same-name fixture']);
+  expect(install().status).toBe(0);
+  const fromNested = createRequire(join(out, 'app/node_modules/synthetic-wrapper/package.json'));
+  const resolved = fromNested.resolve('fixture-local-input/package.json');
+  expect(JSON.parse(readFileSync(resolved, 'utf8')).version).toBe('1.2.3');
+  const lock = JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf8'));
+  expect(lock.hostDependencies[0].installedCopies).toContainEqual({ path: dirname(resolved), version: '1.2.3' });
+  expect(lock.hostDependencies[0].duplicateCount).toBe(0); // Bun hoists the identical override.
+  expect(readFileSync(join(out, 'app/bun.lock'), 'utf8')).not.toContain('fixture-local-input@9.');
+});
+test('trusted dependency names refuse before output creation', () => {
+  const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')); pkg.trustedDependencies = ['fixture-local-input'];
+  writeFileSync(join(repo, 'package.json'), JSON.stringify(pkg)); git(['commit', '-am', 'Trusted input']);
+  refused('E_HOST_DEPENDENCY_TRUSTED');
+});
+for (const format of ['gnu', 'pax']) test(`real tar --format=${format} fixture refuses with observed magic before output`, () => {
+  const source = join(dir, 'tar-source'); mkdirSync(join(source, 'package'), { recursive: true });
+  writeFileSync(join(source, 'package/package.json'), JSON.stringify({ name: 'fixture-local-input', version: '1.2.3' }));
+  execFileSync('tar', ['--format=' + format, '-czf', archive, '-C', source, 'package']);
+  digest = createHash('sha256').update(readFileSync(archive)).digest('hex');
+  refused('E_HOST_DEPENDENCY_ARCHIVE');
+  const magic = format === 'gnu' ? 'ustar  \0' : 'ustar\0' + '00';
+  expect(install().stderr).toContain('observed magic=' + JSON.stringify(magic));
+});
+test('superseded inputs are retained for operator-controlled rollback, including after removing the option', () => {
+  expect(install().status).toBe(0); const old = join(out, 'host-inputs', digest + '.tgz');
+  pack('fixture-local-input', '1.4.0'); expect(install().status).toBe(0);
+  expect(existsSync(old)).toBe(true);
+  writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'synthetic-host' })); git(['commit', '-am', 'No inputs']);
+  expect(install([]).status).toBe(0); expect(existsSync(old)).toBe(true);
+});
+test('post-install output failure removes the mutated checkout and only this attempts new snapshot', () => {
+  expect(install().status).toBe(0); const old = join(out, 'host-inputs', digest + '.tgz');
+  rmSync(join(out, 'run.sh')); mkdirSync(join(out, 'run.sh')); // Force a write failure after bun install.
+  pack('fixture-local-input', '1.4.0'); const failed = join(out, 'host-inputs', digest + '.tgz');
+  expect(install().status).toBe(3);
+  expect(existsSync(join(out, 'app'))).toBe(false);
+  expect(existsSync(old)).toBe(true); expect(existsSync(failed)).toBe(false);
+  expect(readdirSync(join(dir, 'staging'))).toEqual([]);
+});
+test('declined confirm gate removes staging and creates no output', () => {
+  const result = spawnSync(realBun, [resolve('bin/cook'), 'install', recipe, '--out', out, '--ch-repo', repo, '--no-prompts', '--host-dependency', option()], { encoding: 'utf8', env: { ...process.env, TMPDIR: join(dir, 'staging') } });
+  expect(result.status).toBe(1); expect(existsSync(out)).toBe(false);
+  expect(readdirSync(join(dir, 'staging'))).toEqual([]);
+});
+test('split layout stores input with runtime code, not configuration or state', () => {
+  const bun = join(shim, 'selected-bun'), node = join(shim, 'node');
+  writeFileSync(bun, `#!/bin/sh\nif [ "$1" = --version ]; then echo 1.4.4; else exec '${realBun}' "$@" --offline; fi\n`); chmodSync(bun, 0o755);
+  writeFileSync(node, '#!/bin/sh\necho v22.23.3\n'); chmodSync(node, 0o755);
+  const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')); pkg.engines = { bun: '^1.4', node: '^22' };
+  writeFileSync(join(repo, 'package.json'), JSON.stringify(pkg)); git(['commit', '-am', 'Engines']);
+  const layout = { schema: 'connectome.host-layout/v1', runtime: out, config: join(dir, 'config'), state: join(dir, 'state'), workspace: join(dir, 'workspace'), credentials: join(dir, 'credentials'), connectorState: {} };
+  const path = join(dir, 'layout.json'); writeFileSync(path, JSON.stringify(layout));
+  expect(install(['--host-dependency', option(), '--bun-path', bun, '--node-path', node, '--layout', path]).status).toBe(0);
+  expect(existsSync(join(out, 'host-inputs', digest + '.tgz'))).toBe(true);
+  expect(existsSync(join(layout.config, 'host-inputs'))).toBe(false);
+});
+
+test('installed-copy census reports scoped and nested duplicates without validating their ranges', () => {
+  const root = join(out, 'app'), name = '@fixture/pinned';
+  const copies = [join(root, 'node_modules', name), join(root, 'node_modules/wrapper/node_modules', name)] as const;
+  for (const [i, path] of copies.entries()) {
+    mkdirSync(path, { recursive: true }); writeFileSync(join(path, 'package.json'), JSON.stringify({ name, version: `${i + 1}.0.0` }));
+  }
+  writeFileSync(join(root, 'node_modules/wrapper/package.json'), JSON.stringify({ name: 'wrapper', version: '1.0.0' }));
+  const records = [{ name }] as LockedHostDependency[];
+  recordInstalledHostDependencies(root, records);
+  expect(records[0]!.installedCopies).toEqual([{ path: copies[0], version: '1.0.0' }, { path: copies[1], version: '2.0.0' }]);
+  expect(records[0]!.duplicateCount).toBe(1);
+});
+test('reused durable snapshots are rehashed before checkout mutation', () => {
+  expect(install().status).toBe(0);
+  const snapshot = join(out, 'host-inputs', digest + '.tgz');
+  chmodSync(snapshot, 0o600); writeFileSync(snapshot, 'tampered'); chmodSync(snapshot, 0o400);
+  const result = install(); expect(result.status).not.toBe(0); expect(result.stderr).toContain('E_HOST_DEPENDENCY_HASH');
+  expect(existsSync(snapshot)).toBe(true); // Existing rollback artifacts are not deleted.
+  expect(existsSync(join(out, 'app/node_modules/fixture-local-input/package.json'))).toBe(true);
+  expect(readdirSync(join(dir, 'staging'))).toEqual([]);
+});
+
+test('recipe writes cannot overlap durable host inputs', () => {
+  writeFileSync(recipe, JSON.stringify({ name: 'Synthetic', agent: { systemPrompt: 'Test' }, containerTemplateFiles: [{ hostPath: 'collision', inContainer: '/host-inputs/collision', template: 'conflict' }] }));
+  refused('E_HOST_DEPENDENCY_SOURCE');
+  expect(readdirSync(join(dir, 'staging'))).toEqual([]);
 });
