@@ -9,9 +9,9 @@ can run if someone explicitly invokes it; staging is not a startup interlock.
 ## Commands
 
 ```sh
-cook deploy plan --repo /path/to/deploy-repo --agent alnold
-cook deploy stage --repo /path/to/deploy-repo --agent alnold --root /scratch/alnold
-cook deploy check --repo /path/to/deploy-repo --agent alnold --root /scratch/alnold
+cook deploy plan --repo /path/to/deploy-repo --agent example-agent
+cook deploy stage --repo /path/to/deploy-repo --agent example-agent --root /scratch/example-agent
+cook deploy check --repo /path/to/deploy-repo --agent example-agent --root /scratch/example-agent
 ```
 
 Plan reads declarations only: no fetching, executing engines, directory creation,
@@ -38,7 +38,7 @@ report `E_DEPLOY_BUILD`, without echoing potentially private subprocess output.
   path cannot honestly deliver an enforced hold.
 - `agents/<slug>/recipe.json`: nonsecret recipe validated by the existing recipe
   validator plus the adapter's closed supported fields. The adapter includes the
-  supplied Alnold runtime fields; it does not change legacy recipe validation.
+  supplied reference-agent runtime fields; it does not change legacy recipe validation.
 - Optional `agents/<slug>/host.yml`: explicit build inputs below.
 
 YAML here means the reference repo's JSON-flow subset with optional full-line
