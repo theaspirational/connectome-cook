@@ -62,7 +62,7 @@ export interface AgentConfig {
   host: string; user: string; hold: boolean; layout: string;
   paths: Record<string, string>; release: string;
   units: Record<string, { name: string; exec_start: string[]; unit: Record<string,string>; service: Record<string,string>; environment: Record<string,string>; install: Record<string,string>; exec_start_pre?: string }>;
-  credentials: Array<{ name: string; source: string; deliver: string; consumer: string; destination?: string }>;
+  credentials: Array<{ name: string; source?: string; deliver: string; consumer: string; destination?: string }>;
   seed_settings: null; versions?: Record<string, string>;
 }
 function agent(v: unknown): AgentConfig {
@@ -90,7 +90,7 @@ function agent(v: unknown): AgentConfig {
     const c = closed(value, ['name','source','deliver','consumer','destination']);
     const name = text(c.name);
     if (!/^[A-Za-z0-9_.-]+$/.test(name) || names.has(name)) refuse(); names.add(name);
-    path(c.source); text(c.consumer);
+    if(c.source!==undefined)path(c.source); text(c.consumer);
     if (!['file','systemd-credential','systemd-credential+copy-0600'].includes(text(c.deliver))) refuse();
     if (c.destination !== undefined) path(c.destination);
   }
@@ -102,10 +102,10 @@ function agent(v: unknown): AgentConfig {
 export interface HostConfig {
   chRepo?: string; chRef?: string; bunPath?: string; nodePath?: string;
   hostDependencies?: string[]; userUnit?: string; layout?: HostLayout;
-  credentialBindings?: CredentialBindings; agentId?: string; lineage?: string;
+  credentialBindings?: CredentialBindings; agentId?: string; lineage?: string; stateDirectory?: string;
 }
 function host(v: unknown): HostConfig {
-  const h = closed(v, ['chRepo','chRef','bunPath','nodePath','hostDependencies','userUnit','layout','credentialBindings','agentId','lineage']);
+  const h = closed(v, ['chRepo','chRef','bunPath','nodePath','hostDependencies','userUnit','layout','credentialBindings','agentId','lineage','stateDirectory']);
   // Commit/hash/identity positions are typed below, not arbitrary secret slots.
   const {credentialBindings: namedBindings,...otherHost}=h;
   secretFree(otherHost, '', true);
@@ -115,7 +115,7 @@ function host(v: unknown): HostConfig {
   }
   if (h.chRepo !== undefined) assertCredentialFreeSourceUrl(text(h.chRepo));
   if (h.chRef !== undefined && !/^[0-9a-f]{40}$/.test(text(h.chRef))) refuse();
-  for (const k of ['bunPath','nodePath']) if (h[k] !== undefined) path(h[k]);
+  for (const k of ['bunPath','nodePath','stateDirectory']) if (h[k] !== undefined) path(h[k]);
   for (const k of ['agentId','lineage']) if (h[k] !== undefined && !UUID.test(text(h[k]))) refuse();
   if (h.userUnit !== undefined) validateUserUnit(text(h.userUnit));
   if (h.hostDependencies !== undefined) {

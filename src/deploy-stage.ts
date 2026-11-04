@@ -135,6 +135,8 @@ function makeManifest(plan: DeployPlan, build: string): StagedEnvelope {
     for(const [name,destination] of Object.entries(c.files).sort(([a],[b])=>a.localeCompare(b)))providers.push({name,required:true,consumer:profiles[0]!,role:'credentials',destination});
   }
   for(const credential of plan.configuration.credentials) {
+    // Name-only activation routes are bound by the plan, not machine-local paths.
+    if(credential.source===undefined)continue;
     const root=dirname(credential.source);
     let role=roles.find(r=>r.kind==='credentials'&&r.path===root);
     if(!role){role={name:'credential-route-'+roles.length,kind:'credentials',path:root,owner};roles.push(role);}

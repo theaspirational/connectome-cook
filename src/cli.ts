@@ -46,7 +46,7 @@ ${log.bold('Commands:')}
   install <recipe>       Install directly onto this machine (no docker)
   run <recipe|dir>       Launch a materialized deployment (build first if none)
   check <recipe>         Validate a recipe without writing files
-  deploy plan|stage|check  Plan or stage a deploy repository (no activation)
+  deploy <command>      Plan, stage, check, activate, rollback or inspect status
   hold <dir>             Inspect one-way candidate hold (--clear refuses)
   seed check|complete    Inspect fresh history / bounded marker completion
   verify <dir>          Read-only aggregate verification under hold

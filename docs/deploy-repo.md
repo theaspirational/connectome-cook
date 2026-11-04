@@ -1,8 +1,9 @@
-# Deploy repositories: slice 1
+# Deploy repositories
 
 `cook deploy` adapts the connectome-agents layout to the **existing legacy host
-installer**, not to a second installation engine. It does not switch, activate,
-install units, execute hooks, seed history, retrieve Vault secrets, or migrate
+installer**, not to a second build engine. Plan/stage/check do not switch or
+activate. Separate slice-2 activation commands below install repo-driven units.
+Neither path executes hooks, seeds history, retrieves Vault secrets, or migrates
 state. A staged candidate is **not held** and is **not activated**. Its launcher
 can run if someone explicitly invokes it; staging is not a startup interlock.
 
@@ -157,9 +158,9 @@ prepare, seed and verify behavior is unchanged and refuses staged records.
 legacy `--bindings` enrichment remains held-only. A staged record is not evidence
 of an enforced hold or service installation.
 
-## Later switch / retention / rollback (design only)
+## Retention and state compatibility
 
-A future separately approved switch should verify the exact candidate and unit/
+An activation must verify the exact candidate and unit/
 credential/state compatibility under stopped writers, retain the old runtime
 pointer plus matching configuration/unit revision, then atomically replace
 `current`. Use an explicit journal/receipt to distinguish before/after crashes;
@@ -171,8 +172,8 @@ Rollback must select the matching code/config/unit tuple and separately decide
 state compatibility. Pointer reversal does not restore history, credentials,
 provider refresh state or connector queues. Do not rewind newer state implicitly;
 require an independently qualified cold restore and operator loss approval when
-needed. Unit installation, Vault, activation, switch and rollback execution remain
-out of scope for this slice.
+needed. Vault and state restoration remain out of scope. Unit installation and pointer
+rollback are provided by the separate activation commands below.
 
 ### Recipe value validation
 
@@ -200,3 +201,140 @@ Private deploy metadata (the envelope, copied lock and `.cook` JSON records) is
 created as exactly 0600 using the newly owned file descriptor, independent of
 umask, and check requires that exact mode (including absence of special bits).
 This does not change the legacy installer's own materialization-file contract.
+
+## Slice 2: explicit activation
+
+The stage/check contracts above remain unchanged. Activation and rollback are now
+separate opt-in operations; the earlier “design only” switch discussion describes
+the safety boundary, not the command availability.
+
+Example for a neutral agent (all paths and identities below are placeholders):
+
+```sh
+cook deploy activate --repo /opt/example-deploy --agent example-agent \
+  --root /srv/example-deploy --unit-dir /home/example/.config/systemd/user \
+  --scope user --credential-map /srv/example-deploy/credential-map.json --dry-run
+cook deploy activate --repo /opt/example-deploy --agent example-agent \
+  --root /srv/example-deploy --unit-dir /home/example/.config/systemd/user
+cook deploy status --root /srv/example-deploy
+cook deploy rollback --root /srv/example-deploy
+cook deploy rollback --root /srv/example-deploy --to RUNTIME_ID
+```
+
+Add `"stateDirectory": "/srv/example-agent/state"` to the slice-1 host.yml
+build-input object. This must be an existing directory; Cook only checks its
+metadata and never creates, reads, copies, migrates or removes state. Provisioning
+a fresh empty state directory is an operator prerequisite. Changing state path or
+agent identity across an activation refuses. No seeds, layers, private fetch,
+Vault or runtime GC is performed.
+
+Agent unit declarations supply argv `exec_start`, nonsecret `environment`,
+and the closed `unit`, `service`, `install` directive maps. `{runtime}` in
+argv/directive values resolves to the checked staged runtime directory; `{state}`
+resolves to host.stateDirectory. WorkingDirectory must match stateDirectory.
+Service restart defaults to on-failure and Type to simple. System scope defaults
+User to agent.user; user scope resolves agent.user through the local account resolver and requires
+its uid and primary gid to match the invoking user manager identity before any
+write (including lock creation); per-unit User/Group overrides refuse. Sidecars are additional entries
+in agent.units, not recipe services. Pre-start hooks and RuntimeDirectory creation
+refuse. Environment references are not evaluated; secret-like literals still
+refuse via the existing guard. Units run exactly the reviewed argv, not an
+implicitly selected launcher. Use the staged run.sh explicitly when appropriate.
+
+A sanitized machine-local credential map (JSON, owned by the invoking uid,
+exactly 0600, outside the deploy repository):
+
+```json
+{"provider-auth": "/run/example-private/provider-auth"}
+```
+
+The corresponding slice-1 credential declaration uses name `provider-auth`,
+consumer equal to the unit profile key, deliver `systemd-credential`, and no source or destination field. An optional legacy source path is descriptive only;
+activation uses exclusively the local mapping. Copy/file delivery and destination
+fields refuse. All declared names must be mapped, and extra names refuse.
+Credential targets are never opened, statted, copied, hashed or logged by Cook.
+LoadCredential paths appear only in private installed units and private journal
+snapshots; dry-run and status redact them. This shape is suitable for sanitized
+pilot preparation; no real pilot identities or paths are supplied here.
+
+Unit directories must already exist, be owned and writable by the invoking uid,
+not group/world writable, and have no symlink ancestors. Cook installs 0600 files
+using fsynced temporary files and rename; it refuses preexisting unmanaged units
+or drift. Scope defaults to user; system scope requires appropriate operator
+privileges. `--systemctl COMMAND` injects the executable for tests; production
+defaults to systemctl. Calls have a five-second timeout. `--timeout MILLISECONDS`
+(default 30000, maximum 300000) bounds health polling between calls. Health means
+every declared unit reports is-active, not connector/provider readiness.
+Same-id activation is a no-op only when the recorded unit tuple and observed
+enablement also match. Every unit requires an explicit WantedBy target declaration.
+An explicit --runtime selects a verified staged plan for the same agent identity;
+the current repo hold still applies. Rollback selects recorded unit snapshots
+without requiring the old repo checkout.
+
+### Transaction, failures and recovery
+
+ROOT/activation.lock uses a nonblocking Linux flock; the descriptor remains open
+through service operations. Dry-run does not acquire/create a lock and is an
+advisory read-only view, not a reservation. ROOT/activation.jsonl is an fsynced
+append-only 0600 journal containing before/after runtime, exact unit snapshots and per-unit enablement snapshots.
+It is private operational data, not a file to commit. A pending entry is durable
+before stopping/disabling old units, installing/enabling new units, or renaming ROOT/current to the
+relative runtimes/ID link. A successful health check appends active. Failure stops/disables
+the attempted units, restores the old units, enablement and pointer, restarts/checks the old
+units, then appends restored. Fresh activation failure removes its units/current.
+
+A crash may leave a pending entry and a mixed set of units, even before current
+changes. Further activation refuses. Run `cook deploy rollback --root ROOT`
+(with the same injected systemctl in tests) to restore the pending entry's before
+snapshot. Recovery is idempotently retryable; failed restoration leaves pending,
+never a success receipt. A truncated journal refuses and requires operator
+inspection; do not truncate it automatically. No stale-lock deletion is needed:
+process exit releases flock. Preserve all referenced runtime/build trees.
+Rollback reverses code/unit selection only; it never rewinds mutable state.
+
+### FIX1: identity, effective history and boot persistence
+
+For user scope, account resolution uses /usr/bin/id with bounded, captured output.
+Both uid and primary gid must match the invoking process; unknown accounts and
+per-unit User/Group changes refuse before lock creation. Cook does not impersonate
+another user manager. System scope retains explicit repo User/Group declarations.
+
+Each activation enables all declared units through the injected systemctl in the
+selected scope. WantedBy must contain explicit target names (for example
+`{"WantedBy": "default.target"}` for a user unit). Enable uses the installed
+absolute unit path, so a configured nonstandard unit directory is supported.
+Before mutation Cook observes is-enabled for the managed predecessor and journals
+the result. Old enablement links are disabled before replacing files; rollback
+and recovery disable attempted units and reinstate the recorded enabled/disabled
+state of the predecessor. A previously disabled unit remains disabled on rollback,
+although it is restarted for health verification. New units already enabled
+outside this journal refuse adoption. Unsupported observations (masked, static,
+linked, runtime-only enablement, errors) refuse rather than guessing a restore
+policy. A successful enable must also be observed as enabled.
+
+Every successful user-scope activate/rollback/recovery and dry-run reports
+W_DEPLOY_LINGER_UNVERIFIED. Enabling user units alone does not guarantee the user
+manager starts at boot or survives logout. Operators must verify linger and their
+host boot policy independently. Cook never runs loginctl or enable-linger, nor
+changes machine policy. The conservative warning remains even on hosts where
+linger was already configured. System scope does not emit this user-manager
+warning. No real reboot or user-manager policy test is implied.
+
+Status/default rollback derive their predecessor from effective committed
+transitions. A failed/restored or pending activation does not replace the previous
+successful runtime: A → B → attempted C → restored B retains previous A.
+Recovery after an interrupted third activation has the same history semantics.
+Same-runtime enablement repair does not consume the prior runtime predecessor.
+
+Journal snapshots now require an enabled map. Older experimental slice-2 journals
+without enablement evidence refuse rather than invent prior boot state. Retain
+such evidence for operator inspection; there is no automatic journal migration.
+
+Rollback/recovery admission reads account metadata only for the selected source
+and restore target, not every historical attempt. Their private declarations must
+still bind to their runtime IDs so account identity can be established. Full
+runtime integrity is required for the restore target before even lock creation
+and checked again under the lock. Corrupt executable payloads in discarded
+candidates or the runtime being replaced do not prevent restoration of an intact
+target. Missing/corrupt identity declarations for selected participants still
+refuse; Cook does not guess which account it would affect.
