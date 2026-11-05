@@ -11,6 +11,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { gitEnvironment } from './process-env.js';
 import { assertCredentialFreeSourceUrl, sourceLocation } from './source-url.js';
 import { log } from './log.js';
 import type { McpSource } from './types.js';
@@ -40,6 +41,7 @@ export function resolveRemoteRef(
     try {
       output = execFileSync('git', [...(sslBypass ? ['-c', 'http.sslVerify=false'] : []), 'ls-remote', url, candidate], {
         encoding: 'utf-8',
+        env: gitEnvironment(),
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 30_000,
       });
