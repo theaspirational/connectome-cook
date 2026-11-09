@@ -43,6 +43,8 @@ export interface Lockfile {
   version: 1;
   /** A confirmed reinstall started but has not completed successfully. */
   incomplete?: true;
+  /** Explicit roots and connector-state bindings for a split host install. */
+  layout?: import('./host-layout.js').HostLayout;
   /** Operator-selected engines, validated against the acquired host. */
   engines?: import('./host-engines.js').HostEngines;
   /** Which backend materialized this directory. */

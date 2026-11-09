@@ -22,6 +22,7 @@ import {
   runHostBackend,
 } from './backends/host.js';
 import { knownSecretEnvironmentNames } from './process-env.js';
+import { hostLayout, type HostLayout } from './host-layout.js';
 import { renderUserUnit, validateUserUnit } from './host-unit.js';
 import { pinSources, resolveRemoteRef } from './pin-refs.js';
 import { listTemplates, scaffoldRecipe, type TemplateName } from './init.js';
@@ -97,9 +98,14 @@ async function runBuildPipeline(argv: string[]): Promise<BuildResult> {
     // mri auto-handles `--no-<flag>` as `flag: false`; we read it as
     // `flags.prompts === false` below.
     boolean: ['help', 'strict', 'pin-refs', 'allow-incomplete-templates'],
-    string: ['out', 'env-file', 'image-name'],
+    string: ['out', 'env-file', 'image-name', 'layout'],
     alias: { h: 'help' },
   });
+
+  if (Object.hasOwn(flags, 'layout')) {
+    log.error('E_HOST_LAYOUT: --layout is only supported by cook install, not build/run');
+    return { exitCode: 1, outDir: '' };
+  }
 
   if (flags.help) {
     process.stdout.write(BUILD_USAGE);
@@ -179,6 +185,7 @@ ${log.bold('Flags:')}
                          Write templated config files even when \${VAR}
                          references render as empty (default: refuse)
   --env-file <path>      Read variable values from this file before prompting
+  --layout <local-json>  Opt-in split roots and explicit connector-state mappings
   --ch-repo <url>        connectome-host repo (default: ${DEFAULT_CH_REPO_URL})
   --ch-ref <ref>         connectome-host ref (default: ${DEFAULT_CH_REF})
   --bun-path <absolute>  Validate host engines (requires --node-path)
@@ -191,7 +198,7 @@ ${log.bold('Flags:')}
 async function handleInstall(argv: string[]): Promise<number> {
   const flags = mri(argv, {
     boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates'],
-    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit'],
+    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit', 'layout'],
     alias: { h: 'help' },
   });
 
@@ -207,6 +214,20 @@ async function handleInstall(argv: string[]): Promise<number> {
     return 1;
   }
 
+  let layout: HostLayout | undefined;
+  // Layout flag shape errors must not trigger recipe prompts or source fetches.
+  if (flags.layout !== undefined) {
+    if (typeof flags.layout !== 'string' || !flags.layout.trim()) throw new Error('E_HOST_LAYOUT: --layout requires a nonempty local JSON path');
+    if (!flags['bun-path'] || !flags['node-path']) throw new Error('E_HOST_LAYOUT: --layout requires both --bun-path and --node-path');
+    try {
+      const value = JSON.parse(readFileSync(flags.layout, 'utf8'));
+      // With no --out, the recipe-derived default is checked after resolution.
+      layout = hostLayout(value, flags.out !== undefined ? resolve(flags.out) : value?.runtime);
+      if (flags['user-unit'] !== undefined) renderUserUnit(layout.runtime, flags['user-unit'], layout.state);
+    } catch (error) {
+      throw new Error(`E_HOST_LAYOUT: --layout ${flags.layout}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   // Refuse unit options before recipe resolution can fetch or prompt.
   if (flags['user-unit'] !== undefined) {
     validateUserUnit(flags['user-unit']);
@@ -215,7 +236,7 @@ async function handleInstall(argv: string[]): Promise<number> {
     }
     // Explicit output paths are known before recipe resolution can prompt.
     // The default is slug-derived and is validated by the host backend.
-    if (flags.out !== undefined) renderUserUnit(resolve(flags.out), flags['user-unit']);
+    if (flags.out !== undefined) renderUserUnit(resolve(flags.out), flags['user-unit'], layout?.state);
   }
 
   const planResult = await resolvePlan(recipePath, {
@@ -257,6 +278,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   );
   const result = await runHostBackend(planResult.plan, {
     installDir,
+    layout,
     userUnit: flags['user-unit'],
     bunPath: flags['bun-path'],
     nodePath: flags['node-path'],
@@ -387,9 +409,14 @@ async function handleRun(argv: string[]): Promise<number> {
   // found regardless of flag order.
   const runFlags = mri(buildArgs, {
     boolean: ['rebuild', 'help', 'strict', 'pin-refs', 'allow-incomplete-templates'],
-    string: ['out', 'env-file', 'image-name'],
+    string: ['out', 'env-file', 'image-name', 'layout'],
     alias: { h: 'help' },
   });
+  if (Object.hasOwn(runFlags, 'layout')) {
+    log.error('E_HOST_LAYOUT: --layout is only supported by cook install, not build/run');
+    return 1;
+  }
+
   const [target] = runFlags._ as string[];
 
   // Build-affecting flags mean the operator wants a fresh materialization —

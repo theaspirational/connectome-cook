@@ -14,15 +14,15 @@ function unitQuote(value: string, exec = false): string {
   // Unit specifiers expand even in quoted strings.
   return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%') + '"';
 }
-export function renderUserUnit(installDir: string, name = 'connectome.service'): string {
+export function renderUserUnit(installDir: string, name = 'connectome.service', workingDirectory = installDir): string {
   assertHostEnginePath(installDir);
   validateUserUnit(name);
   // A terminal backslash can continue this bare value onto ExecStart.
   // Refuse all terminal runs rather than attempting another representation.
-  if (installDir.endsWith('\\')) {
+  if (workingDirectory.endsWith('\\')) {
     throw new Error('E_HOST_UNIT: installation path must not end in a backslash');
   }
-  if (!isAbsolute(installDir) || /[\0-\x1f\x7f]/.test(installDir) || /\s$/.test(installDir)) {
+  if (!isAbsolute(workingDirectory) || /[\0-\x1f\x7f]/.test(workingDirectory) || /\s$/.test(workingDirectory)) {
     throw new Error('E_HOST_UNIT: absolute control-free path without trailing whitespace required');
   }
   return [
@@ -34,7 +34,7 @@ export function renderUserUnit(installDir: string, name = 'connectome.service'):
     '[Service]',
     'Type=simple',
     // WorkingDirectory is not an Exec* command: quotes are literal.
-    'WorkingDirectory=' + installDir.replace(/%/g, '%%'),
+    'WorkingDirectory=' + workingDirectory.replace(/%/g, '%%'),
     'ExecStart=/bin/bash ' + unitQuote(join(installDir, 'run.sh'), true) + ' --headless',
     'Restart=on-failure',
     'RestartSec=5s',
