@@ -186,7 +186,7 @@ for (const declaration of ['source only', 'runtime env', 'requirement'] as const
     for (const command of ['ls-remote', 'clone', 'fetch', 'checkout', 'rev-parse']) {
       expect(privateCalls.some(call => call.args[0] === command)).toBe(true);
     }
-    // Runtime .env and requirement values match main, independently of Git auth.
+    // Runtime .env matches main; lock v2 keeps requirement names, not answers.
     const artifacts = (path: string): string[] => readdirSync(path, { withFileTypes: true })
       .flatMap(entry => entry.isDirectory() ? artifacts(join(path, entry.name))
         : /^(install-env|custom-env)\.txt$/.test(entry.name) || join(path, entry.name) === join(out, '.env') || (declaration === 'requirement' && join(path, entry.name) === join(out, 'connectome.lock')) ? [] : [readFileSync(join(path, entry.name), 'utf-8')]);
@@ -198,8 +198,11 @@ for (const declaration of ['source only', 'runtime env', 'requirement'] as const
     expect(runtimeEnv).toContain(`GITHUB_TOKEN='${token}'`);
     expect(statSync(join(out, '.env')).mode & 0o777).toBe(0o600);
     const lock = JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf-8'));
-    if (declaration === 'requirement') expect(lock.requirements[0].value).toBe(token);
-    else expect(JSON.stringify(lock)).not.toContain(token);
+    if (declaration === 'requirement') {
+      expect(lock.requirements[0].envName).toBe('GITHUB_TOKEN');
+      expect(lock.requirements[0]).not.toHaveProperty('value');
+    }
+    expect(JSON.stringify(lock)).not.toContain(token);
     if (declaration === 'runtime env') {
       const emitted = JSON.parse(readFileSync(join(out, 'recipes/shared.json'), 'utf-8'));
       expect(emitted.mcpServers.github.env.GITHUB_TOKEN).toBe('${GITHUB_TOKEN}');
@@ -622,8 +625,9 @@ test('R3 production probe: all reviewed bypasses leave every generated file cana
   const out = join(dir, 'out');
   const files = (path: string): string[] => readdirSync(path, { withFileTypes: true })
     .flatMap(entry => entry.isDirectory() ? files(join(path, entry.name)) : [join(path, entry.name)]);
-  const control = run('build', { url: 'https://user-name.1@example.invalid/x.git' });
+  const control = run('build', { url: 'https://user-name.1@example.invalid/x.git' }, ['--pin-refs']);
   expect(control.status).toBe(0);
+  const callsBefore = gitCalls();
   const before = new Map(files(out).map(path => [path, readFileSync(path, 'utf-8')]));
   for (const name of ['Dockerfile', 'README.md', 'connectome.lock']) {
     expect(before.has(join(out, name))).toBe(true);
@@ -647,7 +651,7 @@ test('R3 production probe: all reviewed bypasses leave every generated file cana
       expect(result.status).not.toBe(0);
     }
   }
-  expect(gitCalls()).toBe('');
+  expect(gitCalls()).toBe(callsBefore);
   console.log(`R3 production probe: ${usernames.length * 2} refused builds; ${before.size} files checked per build; no canary or writes`);
 });
 
@@ -816,11 +820,14 @@ for (const name of [
           expect(build[name]).toBe(selection === 'parent' ? parentValue : undefined);
           expect(build.COOK_PASS_ENV).toBeUndefined();
         }
-        // Opt-in affects subprocesses only, not main's runtime/lock semantics.
+        // Opt-in affects subprocesses only; v2 locks retain names, not answers.
         expect(readFileSync(join(out, '.env'), 'utf-8')).toContain(`${name}='${resolvedValue}'`);
         expect(statSync(join(out, '.env')).mode & 0o777).toBe(0o600);
         const lock = JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf-8'));
-        if (requirement) expect(lock.requirements[0].value).toBe(resolvedValue);
+        if (requirement) {
+          expect(lock.requirements[0].envName).toBe(name);
+          expect(lock.requirements[0]).not.toHaveProperty('value');
+        }
         const emitted = JSON.parse(readFileSync(join(out, 'recipes/collision.json'), 'utf-8'));
         expect(emitted.mcpServers.fixture.env.TOKEN).toBe(`\${${name}}`);
         for (const call of gitEnvironments()) {
@@ -851,8 +858,9 @@ for (const selection of ['none', 'parent', 'unset'] as const) {
       expect(buildEnvFile(join(dir, 'out', path)).SDK_ROOT).toBe(selection === 'parent' ? env.SDK_ROOT : undefined);
     }
     const lock = JSON.parse(readFileSync(join(dir, 'out/connectome.lock'), 'utf-8'));
-    expect(lock.requirements[0]).toMatchObject(selection === 'unset'
-      ? { value: dir, origin: 'probe' } : { value: env.SDK_ROOT, origin: 'process-env' });
+    expect(lock.requirements[0]).toMatchObject({ envName: 'SDK_ROOT', origin: selection === 'unset' ? 'probe' : 'process-env' });
+    expect(lock.requirements[0]).not.toHaveProperty('value');
+    expect(readFileSync(join(dir, 'out/.env'), 'utf-8')).toContain(`SDK_ROOT='${selection === 'unset' ? dir : env.SDK_ROOT}'`);
   });
 }
 

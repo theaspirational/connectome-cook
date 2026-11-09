@@ -25,7 +25,7 @@ import {
   firstProbeHit,
   enforceRequirements,
 } from './requirements.js';
-import { readLockfile, writeLockfile, type Lockfile } from './lockfile.js';
+import { readLockfile, type LockfileV1 as Lockfile } from './lockfile.js';
 import type { InstallPlan } from './plan.js';
 import type { McpSource, WalkResult } from './types.js';
 import type { Recipe } from './vendor/recipe.js';
@@ -226,7 +226,7 @@ describe('lockfile', () => {
       requirements: [{ name: 'spring', envName: 'SPRING_HOME', value: '/opt/spring', origin: 'probe' }],
       launch: { kind: 'script', script: '/inst/run.sh' },
     };
-    writeLockfile(dir, lock);
+    writeFileSync(join(dir, 'connectome.lock'), JSON.stringify(lock));
     expect(readLockfile(dir)).toEqual(lock);
     expect(readLockfile('/nonexistent-dir-xyz')).toBeNull();
 

@@ -65,3 +65,17 @@ if (args[0] === 'clone') {
     rmSync(root, { recursive: true, force: true });
   }
 }
+
+/** Compare the unchanged deployment contract across the intentional v1 -> v2
+ * migration: v2 adds identity/inventory and removes requirement answers. */
+export function comparableLock(raw: string): string {
+  const lock = JSON.parse(raw);
+  return JSON.stringify({
+    backend: lock.backend, recipePath: lock.recipePath,
+    connectomeHost: lock.connectomeHost,
+    components: lock.components.map(({ kind: _kind, ...component }: { kind?: string }) => component),
+    localExtensions: lock.localExtensions,
+    requirements: lock.requirements.map(({ name, envName, origin }: { name: string; envName: string; origin: string }) => ({ name, envName, origin })),
+    launch: lock.launch,
+  });
+}

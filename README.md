@@ -30,7 +30,7 @@ cook check my-agent.json
 
 # Generate the Docker artifact bundle (Dockerfile, compose, .env.example,
 # README, recipes/).  Prompts for any required env vars unless --no-prompts.
-cook build my-agent.json --out ./my-agent-cook
+cook build my-agent.json --pin-refs --out ./my-agent-cook
 
 # Install directly onto this machine — no docker. Clones + builds every
 # component under ~/.connectome/installs/<name>/, resolves host requirements
@@ -40,7 +40,8 @@ cook install my-agent.json
 
 # Launch. Finds an existing materialization (lock in the named dir, then
 # ./<name>-cook, then ~/.connectome/installs/<name>) and launches it without
-# re-resolving; falls back to build-then-compose-up. --rebuild forces a re-cook.
+# re-resolving; falls back to build-then-compose-up (pinning is optional).
+# --rebuild forces a re-cook.
 cook run my-agent.json -- -d            # detached (docker) / launcher args (host)
 cook run ~/.connectome/installs/my-agent # launch a materialized dir directly
 ```
@@ -93,8 +94,12 @@ For code that must link against things already on the machine:
 
 Cook probes the candidates, suggests the first hit, lets you confirm or
 override, and exposes the answer as `$SPRING_HOME` — usable in recipe
-`${VAR}` references and recorded in the lock. For install steps, export the
-parent value and explicitly select its name with `COOK_PASS_ENV` (see below).
+`${VAR}` references. For install steps, export the parent value and explicitly
+select its name with `COOK_PASS_ENV` (see below). The lock records requirement names and
+origins, never their resolved answers. **Secrets must not be literals in recipes;
+supply them through requirements**, not literal defaults or template/environment
+strings. `recipe.sha256` and `build.id` are computed from the recipe bytes as
+written (including any literal secret), not a redacted recipe.
 
 ### Host build environment and source credentials
 
@@ -150,7 +155,7 @@ Cook never prints or persists values **via the COOK_PASS_ENV channel** in locks,
 generated READMEs, recipes or the runtime `.env`. Normal recipe-declared runtime,
 credential-file and requirement materialization is separate and unchanged by
 this filtering: the runtime `.env` retains the same names, values and mode (0600), including
-names that are also `authSecret`; requirement values still appear in the lock.
+names that are also `authSecret`; v2 locks record requirement names only.
 Trust every build receiving an explicitly selected credential.
 
 Git additionally receives by default `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_SSH_VARIANT`,
@@ -219,7 +224,9 @@ ports** — compose service names only resolve inside the docker network.
 
 ### Pinned builds
 
-`--pin-refs` (on `build` and `install`) resolves every branch/tag ref —
+Docker `build` works without `--pin-refs`; unresolved commits are omitted,
+not guessed. Add `--pin-refs` for immutable Git provenance.
+`--pin-refs` (also optional on `install`) resolves every branch/tag ref —
 components and connectome-host itself — to its current commit SHA via
 `git ls-remote` at cook time. The SHA is baked into clone/checkout steps
 (and the `CH_REF` build-arg default) and recorded in `connectome.lock`,
@@ -236,6 +243,99 @@ refs with `authSecret` instead of warning and continuing unpinned. Resolution
 failures are fatal. Docker image-build authentication without `--pin-refs` is
 unchanged; its existing credentialed-remote persistence is not fixed here.
 
+### `connectome.lock` v2
+
+Both backends write v2; readers accept v1 and v2 and refuse unknown versions.
+The next successful build/install rewrites a v1 record as v2 (host reconcile
+can keep matching checkouts, reading their actual `HEAD` even if v1 omitted
+commits). An unreadable/unknown host lock refuses reconcile rather than
+silently reinstalling. `cook run` still launches either version without resolving.
+
+The record adds:
+
+- `cook: {version, commit?}` (package version; commit omitted because installed
+  packages have no reliable source checkout), `recipe: {path, sha256}` (exact
+  loaded UTF-8 root JSON, before validation/substitution), and full
+  40/64-hex Git commits for connectome-host and Git components when known.
+  Docker omits unresolved commits; host requires actual checkout HEADs.
+  Any recorded commit must be a full SHA.
+- Discriminated `components`: `kind: "git"` provenance, or
+  `kind: "npm", name, spec, version?, integrity?` plus the existing key/role.
+  `spec` preserves the complete declared `source.npm` string; `name` is its
+  package name and `version` is included only for an exact version. Tags and
+  ranges remain accepted. Only explicit `source.npm` entries are inventoried;
+  bare npx/uvx commands remain runtime-managed. No registry lookup is added.
+  Integrity is included only from offline metadata already available to cook;
+  currently there is none, so it is omitted. Docker installs the declared spec;
+  host retains its existing npx behavior, not a global-install claim.
+- `build: {id, dir}`: absolute output directory and deterministic ID described
+  below; `credentials: string[]`: sorted unique input names, never values.
+  `LockedRequirement` has **no secret discriminator** on main; its old
+  `value?: string` could leak any secret supplied via `requirements.exposeAs`.
+  V2 removes all requirement answers, including ordinary paths, from the lock;
+  resolution, install environment and `.env` are unchanged. Old v1 locks
+  may already contain secrets: rewriting cannot undo a previous disclosure. Credential names
+  reuse `deriveRequiredVars`/`RequiredVar` (build/sidecar scopes and provider
+  alternatives), requirement env names and credential-file field overrides
+  (or `path#field` without an override). Unclassified runtime/requirement
+  inputs are included conservatively, so this is a superset of secret names.
+- `outputs`: explicit generated-file inventory, with build-relative paths,
+  SHA-256 digests and numeric permission bits (`mode & 0777`). Launch files,
+  Compose/Dockerfile/docs and lowered recipes normally have hashes. Before
+  computing any public output digest, cook checks its generated bytes against
+  **every resolved requirement answer**, regardless of source (prompt, process
+  env, env-file, or accepted probe/default). Raw values and cook's JSON, YAML,
+  Docker env and shell-escaped forms are checked, including embedded values.
+  A match gets mode only plus `"sha256Omitted": "contains-requirement-value"`;
+  neither the matching value nor its name is recorded. All **non-empty** values
+  match, even one character: short secrets must not retain offline verifiers.
+  This can conservatively omit unrelated hashes for common short answers;
+  empty/unresolved answers match nothing. `.env` has **mode only**, never
+  content/hash. Credential/secret files and rendered templates
+  also have mode only: hashing a rendered secret would expose a verifier.
+  Paths are resolved then made build-relative and deduplicated; if a public
+  path is also declared sensitive, sensitive wins and only mode is recorded.
+  Hashes are computed from generated bytes in memory before writing: a hash
+  describes what cook wrote, **not what is on disk**. Public outputs whose
+  generated bytes are unavailable get mode only (currently none). Cook does
+  **not** defend writes against a pre-seeded output directory; use a fresh
+  directory. Links and concurrent changes can still redirect/overwrite writes.
+  The lock itself, cloned/copied trees and operator state are not hashed.
+
+**Recipe secret boundary:** secrets must not be literals in recipes; supply
+secrets through requirements instead. `recipe.sha256` and `build.id` are
+computed from the recipe bytes as written, including literal secrets: the
+public-output guard does not redact or change input identity. These identity
+hashes can therefore verify guesses about an operator-supplied literal secret.
+
+**Identity formula:** `build.id = hex(SHA256(UTF8(canonicalJSON(input))))`.
+Canonical JSON sorts object keys lexically, omits undefined object properties,
+retains array order and has no whitespace. `input` is:
+`{recipe: rootSha256, recipes: [{path, sha256}, ...],
+pins: {connectomeHost: {url, ref, commit}, components}, cook: {version},
+backend, options}`. Recipe identity paths are relative to the root recipe
+directory (including the root filename), never absolute; URL trees use
+relative URL pathnames plus query strings. Recipes retain walker order;
+component pins sort by key. Moving an identical tree or changing only the
+output directory keeps the ID.
+Git pin entries contain `kind,key,role,url,ref,commit,install`; npm entries
+contain `kind,key,role,name,spec,version?,integrity?`. Options are `strict` and
+`allowIncompleteTemplates`, plus Docker's optional `imageName`. Timestamps,
+output/check-out directories, prompt flags, env-file paths and resolved values
+are excluded; every pin participates. Programmatically constructed walks that
+lack loader hashes use SHA-256 of canonical recipe JSON. This is an input
+identity, not a claim that arbitrary install scripts/dependencies are hermetic.
+
+Local extension paths remain in `localExtensions`. Sibling copies have no Git
+provenance and are excluded from the Git inventory on both backends (Docker
+already excluded them); no invented SHA is assigned. Without a split layout there is no cook-defined
+state root outside `build.dir`: the host launcher defaults to
+`build.dir/data`, and Docker's generated bind paths are build-relative.
+In that case `state` is omitted, not guessed from ambient `DATA_DIR` or arbitrary
+recipe mounts. Split layouts record their declared state root. Engine bindings,
+unit hints, layout declarations and host dependency inputs remain optional
+extensions; they do not alter the v2 identity formula. Health is not added.
+
 ### Templates
 
 - `minimal` — single agent, no MCP servers, generic system prompt.
@@ -250,7 +350,7 @@ unchanged; its existing credentialed-remote persistence is not fixed here.
 --image-name <name>    Override the generated image name
 --no-prompts           Non-interactive; warn-and-continue on missing values
 --env-file <path>      Read variable values from this file before prompting
---pin-refs             Resolve branch refs to current SHAs; fail if unresolved
+--pin-refs             Optional: resolve full Git commit SHAs
 ```
 
 ### Anthropic credentials

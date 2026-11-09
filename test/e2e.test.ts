@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, test, beforeAll } from 'bun:test';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
@@ -24,6 +24,9 @@ let outDir: string;
 
 beforeAll(() => {
   outDir = mkdtempSync(join(tmpdir(), 'cook-e2e-'));
+  const bin = join(outDir, 'test-bin');
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'git'), '#!/bin/sh\nprintf \"' + 'a'.repeat(40) + '\\t%s\\n\" \"$3\"\n', { mode: 0o755 });
   // Run cook build via the same bun process that's running the tests.
   const result = spawnSync(
     'bun',
@@ -32,8 +35,8 @@ beforeAll(() => {
      // render templates with empty required vars.  We're verifying the
      // build mechanics, not secret hygiene; opt out of the refusal so the
      // artifacts get written and we can assert their shape.
-    [join(REPO_ROOT, 'bin/cook'), 'build', EXAMPLE_RECIPE, '--out', outDir, '--no-prompts', '--allow-incomplete-templates'],
-    { encoding: 'utf-8', cwd: REPO_ROOT },
+    [join(REPO_ROOT, 'bin/cook'), 'build', EXAMPLE_RECIPE, '--out', outDir, '--no-prompts', '--allow-incomplete-templates', '--pin-refs'],
+    { encoding: 'utf-8', cwd: REPO_ROOT, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } },
   );
   if (result.status !== 0) {
     throw new Error(

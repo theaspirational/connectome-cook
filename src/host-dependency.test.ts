@@ -72,7 +72,7 @@ test('CLI installs the artifact version offline, previews and records direct/ove
   expect(JSON.parse(readFileSync(join(out, 'app/node_modules/fixture-local-input/package.json'), 'utf8')).version).toBe('1.2.3');
   const lock = JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf8'));
   const d = lock.hostDependencies[0];
-  expect(lock.version).toBe(1); expect(lock.connectomeHost.commit).toBe(commit);
+  expect(lock.version).toBe(2); expect(lock.connectomeHost.commit).toBe(commit);
   expect(d).toEqual({ name: 'fixture-local-input', originalRange: '^1.0.0', version: '1.2.3', sha256: digest, size: statSync(archive).size, snapshot: d.snapshot,
     packageJsonDelta: { direct: { section: 'dependencies', name: 'fixture-local-input', before: '^1.0.0', after: 'file:' + d.snapshot }, override: { section: 'overrides', name: 'fixture-local-input', before: null, after: 'file:' + d.snapshot } } });
   expect(d.snapshot).toBe(join(out, 'host-inputs', digest + '.tgz'));

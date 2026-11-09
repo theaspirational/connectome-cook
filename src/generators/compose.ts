@@ -142,7 +142,7 @@ function deriveServiceName(recipeName: string): string {
  *  values for `.env` files, where `$` MUST be escaped to prevent compose
  *  from interpolating substrings like `${M5qt58t}` out of secret values.
  *  Different file format, different rules; they do NOT share a core. */
-function quoteForComposeEnvBlock(value: string): string {
+export function quoteForComposeEnvBlock(value: string): string {
   if (value === '') return '""';
   const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return `"${escaped}"`;

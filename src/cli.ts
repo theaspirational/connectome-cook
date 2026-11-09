@@ -64,7 +64,8 @@ ${log.bold('Flags:')}
   --image-name <name>    Override the generated image name
   --no-prompts           Non-interactive; warn-and-continue on missing values
   --env-file <path>      Read variable values from this file before prompting
-  --pin-refs             Resolve branch refs to commit SHAs (reproducible build)
+  --pin-refs             Optional: resolve full commit SHAs
+                         Docker records commits only when pinned.
   --allow-incomplete-templates
                          Write templated config files even when \${VAR}
                          references render as empty.  Default: refuse the
@@ -320,6 +321,7 @@ Resolution order:
      (--out dir, ./<name>-cook, then ~/.connectome/installs/<name>) and
      launch the first one found — no re-resolution, no prompts.
   3. Otherwise fall through to the classic build-then-\`docker compose up\`.
+     ${log.bold('--pin-refs')} is optional; Docker records commits only when pinned.
      Pass ${log.bold('--rebuild')} to force this path even when a lock exists.
 
 Build flags are the same as ${log.bold('cook build')}.  Anything after \`--\` goes to
@@ -611,7 +613,7 @@ async function handleInit(argv: string[]): Promise<number> {
       process.stdout.write(`    ${log.dim(p)}\n`);
     }
     log.info('');
-    log.info(`Next: ${log.bold(`cook check ${outPath}`)} to verify, then ${log.bold(`cook build ${outPath}`)}.`);
+    log.info(`Next: ${log.bold(`cook check ${outPath}`)} to verify, then ${log.bold(`cook build ${outPath} --pin-refs`)}.`);
     return 0;
   } catch (err) {
     log.error(err instanceof Error ? err.message : String(err));

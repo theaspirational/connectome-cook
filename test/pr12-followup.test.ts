@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -71,12 +71,15 @@ test('closed Codex fleets and disabled fleets do not demand Anthropic', () => {
 test('no-value Codex bundle passes Compose config and preserves existing env', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cook-pr12-'));
   try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'git'), '#!/bin/sh\nprintf \"' + 'a'.repeat(40) + '\\t%s\\n\" \"$3\"\n', { mode: 0o755 });
     const recipe = join(dir, 'codex.json');
     const out = join(dir, 'bundle');
     writeFileSync(recipe, JSON.stringify(walks()[0]!.recipe));
     const build = (extra: string[] = []) => spawnSync(process.execPath, [
-      join(import.meta.dir, '../bin/cook'), 'build', recipe, '--out', out, '--no-prompts', ...extra,
-    ], { encoding: 'utf8', env: { PATH: process.env.PATH, HOME: dir } });
+      join(import.meta.dir, '../bin/cook'), 'build', recipe, '--out', out, '--no-prompts', '--pin-refs', ...extra,
+    ], { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH}`, HOME: dir } });
     const result = build();
     expect(result.status).toBe(0);
     const compose = spawnSync('docker', ['compose', 'config'], { cwd: out, encoding: 'utf8' });
