@@ -200,9 +200,9 @@ origin-scoped `http.<source origin>/.extraHeader` (`Authorization: Basic` with
 `GIT_CONFIG_*` entries for every Git call of that source (including pinning and
 fetch), never put in argv, the URL, `.git/config`, logs, or the build environment.
 The Git credential channel does not add values to the lock or output artifacts.
-Runtime `.env`, recipes and locks retain main's semantics without classifying
-names by their Git use: `.env` includes resolved `authSecret` values, and resolved
-requirement values remain in the lock even if the name is also an `authSecret`.
+Runtime `.env` and recipes retain main's semantics without classifying
+names by their Git use: `.env` includes resolved `authSecret` values. V2 locks
+record requirement names and origins only, never their resolved answers.
 Runtime persistence does not forward those values to build subprocesses.
 Missing tokens and unsupported transports fail with the declaring source
 location; SSH and other

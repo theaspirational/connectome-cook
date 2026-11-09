@@ -119,7 +119,7 @@ This does not sandbox trusted host/package code. There is no registry fallback
 for the selected name and no post-build overlay. Other names may still use
 registries; this is not a frozen/offline closure of every dependency.
 
-`connectome.lock` stays version 1. Its optional `hostDependencies` array records
+`connectome.lock` uses version 2 and retains the optional `hostDependencies` array, recording
 name, originalRange, artifact version, sha256, compressed size, snapshot path
 and `packageJsonDelta`. The delta has `direct` and `override` entries with
 section/name/before/after; override.section is `overrides` or `resolutions`,
