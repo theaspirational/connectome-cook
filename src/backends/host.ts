@@ -640,7 +640,7 @@ async function runHostWithEngines(
     const handlers = signals.map(signal => () => { cleanup(); process.kill(process.pid, signal); });
     if (!commands) signals.forEach((signal, i) => process.on(signal, handlers[i]!));
     try {
-      const checked = preflightHostEngines(options.chRepoUrl, options.chCommit ?? options.chRef, options.bunPath, options.nodePath, cleanup => { removeScratch = cleanup; onEngineScratch?.(cleanup); });
+      const checked = preflightHostEngines(options.chRepoUrl, options.chCommit ?? options.chRef, options.bunPath, options.nodePath, cleanup => { removeScratch = cleanup; onEngineScratch?.(cleanup); }, excluded);
       options = { ...options, chRepoUrl: checked.sourceUrl, chCommit: checked.commit };
       return await materializeHost(plan, options, checked, onStaged, commands);
     } finally {
@@ -742,7 +742,7 @@ async function materializeHost(
   }
 
   const hasRecordedPins = assertHostDependencyReinstall(installDir, existingLock?.hostDependencies, dependencyInputs, options.dropHostDependencies);
-  const dependencies = dependencyInputs.length ? await preflightHostDependencies(options.chRepoUrl, options.chCommit ?? options.chRef, dependencyInputs, installDir, onStaged, commands) : undefined;
+  const dependencies = dependencyInputs.length ? await preflightHostDependencies(options.chRepoUrl, options.chCommit ?? options.chRef, dependencyInputs, installDir, onStaged, commands, sourceGitEnvironment(options.chRepoUrl, undefined, plan.values, 'connectome-host', undefined, knownSecretEnvironmentNames(plan))) : undefined;
   if (dependencies) {
     installDir = dependencies.installDir;
     options = { ...options, installDir, chCommit: dependencies.commit };
@@ -885,12 +885,13 @@ async function materializeHost(
     }
   }
 
-  dependencies?.materialize();
+  if (!layout) dependencies?.materialize();
   if (layout) {
     provisionLayout(layout);
     // Make resumption durable before retiring the reuse lock.
     writeOutput(join(installDir, LAYOUT_MARKER), JSON.stringify({ phase: 'installing', layout }, null, 2) + '\n');
     writeOutput(join(installDir, 'bunfig.toml'), '# Runtime-owned: no preloads.\n');
+    dependencies?.materialize();
   }
   else {
     mkdirSync(installDir, { recursive: true });

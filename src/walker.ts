@@ -22,6 +22,7 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import {
   loadRecipeRaw,
+  loadedRecipeSha256,
   resolveRecipeRelative,
   type Recipe,
   type RecipeFleetChild,
@@ -70,7 +71,7 @@ export async function walkRecipe(rootPath: string, parentRecipe?: Recipe): Promi
     if (visited.has(loc)) return;
     visited.add(loc);
 
-    let sourceSha256: string | undefined;
+    let sourceSha256 = loc === normalizedRoot && parentRecipe ? loadedRecipeSha256(parentRecipe) : undefined;
     const recipe = loc === normalizedRoot && parentRecipe ? parentRecipe
       : await loadRecipeRaw(loc, text => { sourceSha256 = createHash('sha256').update(text).digest('hex'); });
     results.push({ path: loc, recipe, sourceSha256 });

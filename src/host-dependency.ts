@@ -7,6 +7,7 @@ import { gunzipSync } from 'node:zlib';
 import { provisionPrivateDirectory, resolvePrivateDirectoryPath } from './private-directory.js';
 import { log } from './log.js';
 import { PinnedCommands } from './pinned-commands.js';
+import { gitEnvironment } from './process-env.js';
 import { assertCredentialFreeSourceUrl } from './source-url.js';
 
 const MAX_ARCHIVE = 64 * 1024 * 1024, MAX_TAR = 128 * 1024 * 1024, MAX_JSON = 1024 * 1024, MAX_ENTRIES = 10000;
@@ -221,7 +222,7 @@ function snapshot(source: string, dest: string, onCreated?: () => void): Buffer 
   }
   finally { if (input !== undefined) closeSync(input); if (output !== undefined) closeSync(output); }
 }
-export async function preflightHostDependencies(url: string, ref: string, inputs: HostDependencyInput[], installDir: string, onStaged?: (cleanup: () => void) => void, commands = new PinnedCommands()): Promise<{ installDir: string; commit: string; checkout: string; records: LockedHostDependency[]; materialize: () => void; cleanup: () => void; discardNew: () => void }> {
+export async function preflightHostDependencies(url: string, ref: string, inputs: HostDependencyInput[], installDir: string, onStaged?: (cleanup: () => void) => void, commands = new PinnedCommands(), gitEnv = gitEnvironment()): Promise<{ installDir: string; commit: string; checkout: string; records: LockedHostDependency[]; materialize: () => void; cleanup: () => void; discardNew: () => void }> {
   const { satisfies, valid, validRange } = await import('semver');
   assertCredentialFreeSourceUrl(url);
   if (/^[0-9a-f]{4,39}$/i.test(ref)) refuse('E_HOST_DEPENDENCY_SOURCE',
@@ -243,7 +244,7 @@ export async function preflightHostDependencies(url: string, ref: string, inputs
       if (pkg.name !== input.name) refuse('E_HOST_DEPENDENCY_NAME', `${input.path}: expected name ${input.name}, observed ${JSON.stringify(pkg.name)}`);
       return { input, path, size: bytes.length, sha256, pkg };
     });
-    const git = (args: string[]) => commands.run('git', args, root);
+    const git = (args: string[]) => commands.run('git', args, root, false, gitEnv);
     let commit: string, host: Partial<Record<Section | 'overrides' | 'resolutions', Record<string, unknown>>> & { trustedDependencies?: unknown };
     const checkout = join(root, 'source');
     let operation = 'init';

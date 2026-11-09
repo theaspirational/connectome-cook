@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { satisfies, valid, validRange } from 'semver';
 import { repositoryIndependentGitEnv } from './git-env.js';
+import { processAllowlistEnv } from './process-env.js';
 import { assertCredentialFreeSourceUrl } from './source-url.js';
 import { assertHostEnginePath } from './host-engine-path.js';
 
@@ -36,7 +37,7 @@ export function checkEngine(path: string, range: unknown, engine = 'engine', cwd
   let output: string;
   try {
     // Preserve argv[0] for multi-call shims. Never echo subprocess output.
-    output = execFileSync(path, ['--version'], { encoding: 'utf8', timeout: 10000, cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    output = execFileSync(path, ['--version'], { encoding: 'utf8', timeout: 10000, cwd, env: processAllowlistEnv(), stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   } catch { throw new Error(`E_HOST_ENGINE_EXEC: ${engine} --version failed (execution, timeout or non-zero exit)`); }
   const version = valid(output);
   if (!version) throw new Error(`E_HOST_ENGINE_VERSION: ${engine} returned an invalid version`);
@@ -59,12 +60,12 @@ export interface HostEnginePreflight {
 /** Fetch once, inspect without builds, and retain that exact object store for
  * local materialization. Caller owns cleanup on every successful return.
  * onScratch lets the CLI register signal cleanup even before fetching. */
-export function preflightHostEngines(url: string, ref: string, bunPath: string, nodePath: string, onScratch?: (cleanup: () => void) => void): HostEnginePreflight {
+export function preflightHostEngines(url: string, ref: string, bunPath: string, nodePath: string, onScratch?: (cleanup: () => void) => void, excluded: Iterable<string> = []): HostEnginePreflight {
   assertCredentialFreeSourceUrl(url);
   // Git treats a colon before the first slash as a remote (including scp
   // host:path). Resolve only local spellings, as git clone does for origin.
   if (!isAbsolute(url) && !/^[^/]+:/.test(url)) url = process.cwd() + '/' + url;
-  const env = repositoryIndependentGitEnv();
+  const env = repositoryIndependentGitEnv(excluded);
   const scratch = mkdtempSync(join(tmpdir(), 'cook-engines-'));
   const cleanup = () => rmSync(scratch, { recursive: true, force: true });
   onScratch?.(cleanup);

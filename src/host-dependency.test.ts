@@ -810,3 +810,40 @@ spyOn(fs, 'rmSync').mockImplementation((path, opts) => {
     await exited;
   }
 }, 10000);
+
+test('integration: dependency pins, selected engines, split layout and user unit share one v2 record', () => {
+  // Split-layout roots deliberately do not inherit a possibly group-writable TMPDIR.
+  const root = mkdtempSync('/tmp/cook-merge-layout-');
+  const previousSelection = process.env.COOK_PASS_ENV;
+  try {
+    out = join(root, 'runtime');
+    const pkg = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'));
+    pkg.engines = { bun: '>=1.0.0', node: '>=20.0.0' };
+    writeFileSync(join(repo, 'package.json'), JSON.stringify(pkg));
+    git(['add', 'package.json']); git(['commit', '-m', 'Declare synthetic host engines']);
+    const layout = { schema: 'connectome.host-layout/v1', config: join(root, 'config'), runtime: out,
+      state: join(root, 'state'), workspace: join(root, 'workspace'), credentials: join(root, 'credentials'), connectorState: {} };
+    const layoutPath = join(dir, 'layout.json');
+    writeFileSync(layoutPath, JSON.stringify(layout));
+    const node = execFileSync('node', ['-p', 'process.execPath'], { encoding: 'utf8' }).trim();
+    // Keep the real selected Bun's build cache in the dispatched worktree.
+    process.env.COOK_PASS_ENV = [previousSelection, 'BUN_INSTALL_CACHE_DIR'].filter(Boolean).join(',');
+    const result = install(['--host-dependency', option(), '--bun-path', realBun, '--node-path', node,
+      '--layout', layoutPath, '--user-unit', 'synthetic.service']);
+    if (result.status) console.error(result.stdout, result.stderr);
+    expect(result.status).toBe(0);
+    const lock = JSON.parse(readFileSync(join(out, 'connectome.lock'), 'utf8'));
+    expect(lock.version).toBe(2);
+    expect(lock.layout).toEqual(layout);
+    expect(lock.state).toEqual({ path: layout.state });
+    expect(lock.hostDependencies[0].sha256).toBe(digest);
+    expect(lock.engines.bun.path).toBe(realBun);
+    expect(lock.launch.userUnit).toBe(join(out, 'synthetic.service'));
+    expect(statSync(lock.launch.userUnit).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(join(out, 'app/node_modules/fixture-local-input/package.json'), 'utf8')).version).toBe('1.2.3');
+    expect(lock.outputs.some((output: { path: string }) => output.path === 'synthetic.service')).toBe(true);
+  } finally {
+    if (previousSelection === undefined) delete process.env.COOK_PASS_ENV; else process.env.COOK_PASS_ENV = previousSelection;
+    rmSync(root, { recursive: true, force: true });
+  }
+});

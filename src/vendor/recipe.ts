@@ -42,6 +42,7 @@
  *      shape.
  */
 
+import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 
@@ -394,6 +395,12 @@ export function resolveRecipeRelative(child: string, base: RecipeSourceBase): st
  * operator, and the walker can drive its own deterministic traversal.
  * onSource lets the walker hash the exact loaded text without a second fetch.
  */
+const loadedSourceHashes = new WeakMap<Recipe, string>();
+/** Loader provenance for a reused parent; programmatic recipes have none. */
+export function loadedRecipeSha256(recipe: Recipe): string | undefined {
+  return loadedSourceHashes.get(recipe);
+}
+
 export async function loadRecipeRaw(source: string, onSource?: (text: string) => void): Promise<Recipe> {
   let text: string;
 
@@ -412,7 +419,9 @@ export async function loadRecipeRaw(source: string, onSource?: (text: string) =>
   }
 
   onSource?.(text);
-  return validateRecipe(JSON.parse(text));
+  const recipe = validateRecipe(JSON.parse(text));
+  loadedSourceHashes.set(recipe, createHash('sha256').update(text).digest('hex'));
+  return recipe;
 }
 
 /**

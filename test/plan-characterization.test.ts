@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 
 // Run in a clean process: no inherited credentials, probes, prompts or network.
 // Snapshots were recorded on main 916cad09, before extracting inspection.
+// #14 adds sourceSha256 provenance; exclude only that addition from the main contract.
 const root = resolve(import.meta.dir, '..');
 const fixtures = ['triumvirate', 'triumvirate-mid'].flatMap(dir =>
   readdirSync(`${root}/examples/${dir}/recipes`).filter(f => f.endsWith('.json'))
@@ -46,7 +47,7 @@ for (const fixture of cases) {
         process.stderr.write = s => { events.push(['stderr', String(s)]); return true; };
         const result = await resolvePlan(${JSON.stringify(fixture)}, {strict: ${strict}, noPrompts: true, envFile: ${JSON.stringify(envFile)}});
         console.log = () => {};
-        await Bun.write(Bun.stdout, JSON.stringify({events, exitCode: result.ok ? 0 : result.exitCode, resultHash: createHash('sha256').update(JSON.stringify(result).replaceAll(process.cwd(), '<repo>')).digest('hex')}));
+        await Bun.write(Bun.stdout, JSON.stringify({events, exitCode: result.ok ? 0 : result.exitCode, resultHash: createHash('sha256').update(JSON.stringify(result, (key, value) => key === 'sourceSha256' ? undefined : value).replaceAll(process.cwd(), '<repo>')).digest('hex')}));
       `;
       const result = Bun.spawnSync([process.execPath, '-e', script], {
         cwd: root, env: { PATH: process.env.PATH!, HOME: '/nonexistent' },

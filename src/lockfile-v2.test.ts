@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runDockerBackend } from './backends/docker.js';
 import { resolvePlan } from './plan.js';
+import { loadRecipeRaw } from './vendor/recipe.js';
 import { spawnSync } from 'node:child_process';
 import { buildId, createOutputHasher, deploymentRecord, fullCommit, outputRecords, sha256, writeLockfile, type LockfileV2, readLockfile } from './lockfile.js';
 
@@ -582,7 +583,7 @@ test('writer strips runtime value properties too; full-SHA enforcement and expli
   expect(outputRecords(f.out, new Map([['entrypoint.sh', undefined]])).map(o => o.path)).not.toContain('operator-state');
 });
 
-test('URL recipe provenance hashes the loaded text once, not a later fetch', async () => {
+for (const reuseParent of [false, true]) test(`URL recipe provenance hashes the loaded text once, not a later fetch (reused=${reuseParent})`, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cook-v2-url-')); dirs.push(dir);
   const text = '{ "name": "url", "agent": { "provider": "openai-codex", "systemPrompt": "test" } }\n';
   let requests = 0;
@@ -592,7 +593,8 @@ test('URL recipe provenance hashes the loaded text once, not a later fetch', asy
   } });
   try {
     const url = `http://127.0.0.1:${server.port}/recipe.json`;
-    const result = await resolvePlan(url, { noPrompts: true, strict: false });
+    const parent = reuseParent ? await loadRecipeRaw(url) : undefined;
+    const result = await resolvePlan(url, { noPrompts: true, strict: false }, parent);
     if (!result.ok) throw new Error('URL plan failed');
     expect((await runDockerBackend(result.plan, {
       outDir: dir, strict: false, noPrompts: true, pinRefs: true, pinnedChRef: SHA, allowIncompleteTemplates: false,
