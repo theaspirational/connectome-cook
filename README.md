@@ -268,6 +268,14 @@ The record adds:
   Integrity is included only from offline metadata already available to cook;
   currently there is none, so it is omitted. Docker installs the declared spec;
   host retains its existing npx behavior, not a global-install claim.
+- `external` (host only, omitted when empty): servers marked
+  `"source": { "external": true }`, as sorted `{name, command}` records. The
+  marker declares a server already installed on the host: a literal absolute
+  `command` and absolute path-like `args` (npx/uvx, relative or `${VAR}` paths
+  are refused, as is mixing it with `url`/`npm`). Cook accepts it under
+  `--strict` but never fetches, builds, copies, rewrites or binds
+  `connectorState` to it, and claims no commit. Env and args are never
+  recorded. The docker backend refuses the marker.
 - `build: {id, dir}`: absolute output directory and deterministic ID described
   below; `credentials: string[]`: sorted unique input names, never values.
   `LockedRequirement` has **no secret discriminator** on main; its old

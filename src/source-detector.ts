@@ -17,17 +17,24 @@
  *     `(recipePath, mcpServerName)` pair.
  *   - non-strict mode → emit a sibling-copy entry. Operator must supply a
  *     checkout adjacent to the recipe at build time.
+ *
+ * A server marked `source: { external: true }` is installed on the host
+ * outside cook: it is validated (see `detectExternalServers`) and skipped
+ * in both modes — it is never a source.
  */
 
-import { basename } from 'node:path';
+import { basename, isAbsolute } from 'node:path';
 import { assertCredentialFreeSourceUrl } from './source-url.js';
 import type {
+  ExternalServer,
   InstallPattern,
   McpSource,
   SourceRef,
   WalkResult,
 } from './types.js';
 import type {
+  RecipeMcpServer,
+  RecipeMcpServerExternalSource,
   RecipeMcpServerGitSource,
   RecipeMcpServerNpmSource,
   RecipeMcpServerSource,
@@ -148,6 +155,8 @@ export function detectSources(
   const byKey = new Map<string, McpSource>();
   /** Unresolved entries to either error on (strict) or shim (non-strict). */
   const unresolved: Array<{ recipePath: string; mcpServerName: string }> = [];
+  // Validates every external marker; those servers are skipped below.
+  detectExternalServers(walks);
 
   for (const walk of walks) {
     const servers = walk.recipe.mcpServers;
@@ -156,6 +165,7 @@ export function detectSources(
     for (const [serverName, server] of Object.entries(servers)) {
       const ref: SourceRef = { recipePath: walk.path, mcpServerName: serverName };
 
+      if (server.source && isExternalSource(server.source)) continue;
       if (server.source) {
         if (isNpmRegistrySource(server.source)) {
           addNpmRegistrySource(byKey, server.source, ref);
@@ -192,6 +202,67 @@ export function detectSources(
   }
 
   return Array.from(byKey.values());
+}
+
+/** Narrow a recipe source to the cook-only external marker. */
+export function isExternalSource(
+  source: RecipeMcpServerSource,
+): source is RecipeMcpServerExternalSource {
+  return 'external' in source;
+}
+
+/**
+ * Every server marked `source: { external: true }`, in walk order. The
+ * marker only makes sense when the host can launch the server without cook:
+ * a literal absolute `command` and absolute path-like `args`. Anything that
+ * would be fetched (npx/uvx), resolved against the CWD, or substituted at
+ * runtime is refused, all problems in one aggregated error.
+ */
+export function detectExternalServers(walks: WalkResult[]): ExternalServer[] {
+  const servers: ExternalServer[] = [];
+  const problems: string[] = [];
+  for (const walk of walks) {
+    for (const [name, server] of Object.entries(walk.recipe.mcpServers ?? {})) {
+      if (!server.source || !isExternalSource(server.source)) continue;
+      const problem = externalServerProblem(server);
+      if (problem) problems.push(`  - ${walk.path} :: ${name}: ${problem}`);
+      else servers.push({ recipePath: walk.path, name, command: server.command! });
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `MCP server(s) marked source.external are not launchable as installed:\n${problems.join('\n')}\n` +
+        `An external server needs a literal absolute command and absolute script paths in args.`,
+    );
+  }
+  return servers;
+}
+
+/** A path-like arg: a flag's `=value`, or a bare arg that names a file. */
+function pathLikeArg(arg: string): string | undefined {
+  const value = arg.startsWith('-') ? (arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : '') : arg;
+  if (!value || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return undefined;
+  const looksLikePath = value.includes('/') || value.startsWith('.') || value.startsWith('~')
+    || /\.(?:[cm]?js|ts|py)$/.test(value);
+  return looksLikePath ? value : undefined;
+}
+
+function externalServerProblem(server: RecipeMcpServer): string | undefined {
+  if (!server.command || server.url) return 'external requires a stdio command, not a url';
+  if (isRuntimeFetchCommand(server.command)) {
+    return `command '${server.command}' fetches at runtime; use source.npm or drop the external marker`;
+  }
+  const literalAbsolute = (value: string) => isAbsolute(value) && !value.includes('${');
+  if (!literalAbsolute(server.command)) {
+    return `command ${JSON.stringify(server.command)} must be a literal absolute path`;
+  }
+  for (const arg of server.args ?? []) {
+    const path = pathLikeArg(arg);
+    if (path !== undefined && !literalAbsolute(path)) {
+      return `arg ${JSON.stringify(arg)} must be a literal absolute path`;
+    }
+  }
+  return undefined;
 }
 
 /**

@@ -84,9 +84,24 @@ export interface LockfileV2 extends LockCommon {
   credentials: string[];
   /** Only if cook defines a state location outside build.dir. */
   state?: { path: string };
+  /** Host-installed MCP servers (`source.external`), omitted when none. No
+   *  commit or build is claimed, and env/args are never recorded. */
+  external?: LockedExternalServer[];
   outputs: Array<{ path: string; mode: number; sha256?: string; sha256Omitted?: 'contains-requirement-value' }>;
 }
 export type Lockfile = LockfileV1 | LockfileV2;
+
+/** A server cook neither fetched nor built: its name and launch executable. */
+export interface LockedExternalServer {
+  name: string;
+  command: string;
+}
+
+/** Sorted, with identical (name, command) pairs across a fleet collapsed. */
+export function lockedExternalServers(servers: ReadonlyArray<{ name: string; command: string }>): LockedExternalServer[] {
+  const unique = new Map(servers.map(({ name, command }) => [JSON.stringify([name, command]), { name, command }]));
+  return [...unique.values()].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.command < b.command ? -1 : a.command > b.command ? 1 : 0);
+}
 
 export function sha256(data: string | Uint8Array): string {
   return createHash('sha256').update(data).digest('hex');

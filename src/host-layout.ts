@@ -61,6 +61,8 @@ export function validateLayoutConsumers(layout: HostLayout, recipes: Recipe[]): 
   for (const consumer of Object.keys(layout.connectorState)) {
     const matches = recipes.map(r => r.mcpServers?.[consumer]).filter(s => s !== undefined);
     if (!matches.length || matches.some(s => !s.command || s.url)) throw new Error(`E_HOST_LAYOUT: state consumer ${consumer} must be declared stdio`);
+    // Cook never rewrites a host-installed server; its env is declared as-is.
+    if (matches.some(s => s.source && 'external' in s.source)) throw new Error(`E_HOST_LAYOUT: state consumer ${consumer} is source.external; declare its state paths in the recipe env instead`);
   }
 }
 export function provisionLayout(layout: HostLayout): void {

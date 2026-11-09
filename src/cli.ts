@@ -11,7 +11,7 @@ import type { SubcommandHandler } from './types.js';
 import { loadRecipeRaw, type Recipe } from './vendor/recipe.js';
 import { LOCKFILE_NAME, readLockfile } from './lockfile.js';
 import { walkRecipe } from './walker.js';
-import { detectSources } from './source-detector.js';
+import { detectExternalServers, detectSources } from './source-detector.js';
 import { detectExtensions } from './extension-detector.js';
 import { collectEnvVars } from './env-collector.js';
 import { resolvePlan } from './plan.js';
@@ -528,6 +528,10 @@ async function handleCheck(argv: string[]): Promise<number> {
       const refLabel = src.ref ? `@${src.ref}` : '';
       process.stdout.write(`    ${log.bold(src.url + refLabel)}  ${log.dim(`(${src.install.kind} → ${src.inContainerPath})`)}  used by: ${refList}\n`);
     }
+  }
+
+  for (const server of detectExternalServers(walks)) {
+    process.stdout.write(`    ${log.bold(server.name)}  ${log.dim(`(external: ${server.command}, host-installed — not fetched or built)`)}  in: ${server.recipePath.split('/').pop()}\n`);
   }
 
   let detectedExts;

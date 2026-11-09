@@ -22,13 +22,14 @@ import type { Recipe } from './vendor/recipe.js';
 import { log } from './log.js';
 import type {
   EnvVar,
+  ExternalServer,
   LocalExtension,
   McpSource,
   WalkResult,
 } from './types.js';
 import { walkRecipe } from './walker.js';
 import { detectRecipeFilenameCollisions } from './configuration.js';
-import { detectSources } from './source-detector.js';
+import { detectExternalServers, detectSources } from './source-detector.js';
 import { detectExtensions } from './extension-detector.js';
 import { collectEnvVars } from './env-collector.js';
 import {
@@ -144,6 +145,9 @@ export async function resolvePlan(
       `${extCount > 0 ? ` (incl. ${extCount} extension${extCount === 1 ? '' : 's'})` : ''}, ` +
       `${inspection.envVars.length} env var${inspection.envVars.length === 1 ? '' : 's'}`,
     );
+    for (const server of inspection.externals) {
+      log.info(`external MCP server ${server.name}: ${server.command} (host-installed; not fetched or built)`);
+    }
   } catch (err) {
     const messages = err instanceof PlanInspectionError ? err.messages
       : [err instanceof Error ? err.message : String(err)];
@@ -322,6 +326,8 @@ export function validatePlanWalks(walks: WalkResult[]): void {
 /** Results of quiet declaration inspection; warnings retain detector order and text. */
 export interface PlanInspection {
   sources: McpSource[];
+  /** Host-installed servers (`source.external`); never in `sources`. */
+  externals: ExternalServer[];
   localExtensions: LocalExtension[];
   envVars: EnvVar[];
   warnings: string[];
@@ -350,6 +356,7 @@ function inspectPlanWithWarnings(
     const extensions = detectExtensions(walks, { strict, warn });
     return {
       sources: [...sources, ...extensions.gitExtensions],
+      externals: detectExternalServers(walks),
       localExtensions: extensions.localExtensions,
       envVars: collectEnvVars(walks),
     };

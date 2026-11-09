@@ -91,6 +91,17 @@ export interface SourceRef {
   mcpServerName: string;
 }
 
+/** An MCP server marked `source: { external: true }`: installed on the host
+ *  outside cook. Never a source — nothing is fetched, built, copied or
+ *  rewritten. `command` is the literal absolute executable. */
+export interface ExternalServer {
+  /** Path of the recipe that declares the server. */
+  recipePath: string;
+  /** `mcpServers` key. */
+  name: string;
+  command: string;
+}
+
 /** A source-less extension with a recipe-relative path: cook bundles the
  *  directory containing the entry file from the operator's disk into the
  *  build context (`<outDir>/extensions/<name>/`) and the Dockerfile COPYs

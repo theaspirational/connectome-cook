@@ -25,6 +25,7 @@ import { generateEntrypoint } from '../generators/entrypoint.js';
 import { confirmWrite } from '../prompts.js';
 import { hostFilename, serializeCredentialFile } from '../credentials.js';
 import { lowerToConfiguration, recipeFilename } from '../configuration.js';
+import { detectExternalServers } from '../source-detector.js';
 import { DEFAULT_CH_REF, DEFAULT_CH_REPO_URL } from '../generators/dockerfile.js';
 import {
   createOutputHasher, deploymentRecord, fullCommit, outputRecords, resolveNpmComponents,
@@ -74,6 +75,15 @@ export async function runDockerBackend(
     credentialValues,
   } = plan;
   const outDir = options.outDir;
+  // A host-installed executable has no meaning inside an image.
+  const external = detectExternalServers(walks);
+  if (external.length > 0) {
+    log.error(
+      `MCP server(s) marked source.external (${external.map(s => s.name).join(', ')}) are installed on a host, ` +
+      `not in an image — use \`cook install\` (host backend), or give them a git/npm source`,
+    );
+    return { exitCode: 2, outDir };
+  }
   // v2 must never claim a symbolic ref is an immutable pin.
   let chCommit: string | undefined;
   let npmComponents: ReturnType<typeof resolveNpmComponents>;

@@ -40,6 +40,10 @@
  *      @animalabs/agent-framework, a runtime-only dep) to `Record<string,
  *      unknown>`. Cook only cares whether wake is enabled, not its config
  *      shape.
+ *
+ *   3. mcpServers[].source admits a cook-only `{ external: true }` shape
+ *      (an operator-installed server). Cook always demotes `source` to
+ *      `sourceMeta` before shipping, so the runtime loader never sees it.
  */
 
 import { createHash } from 'node:crypto';
@@ -131,7 +135,8 @@ export interface RecipeMcpServer {
  *  globally so the recipe's `npx` command resolves it offline. */
 export type RecipeMcpServerSource =
   | RecipeMcpServerGitSource
-  | RecipeMcpServerNpmSource;
+  | RecipeMcpServerNpmSource
+  | RecipeMcpServerExternalSource;
 
 export interface RecipeMcpServerGitSource {
   url: string;
@@ -157,6 +162,14 @@ export interface RecipeMcpServerGitSource {
  *  `@professional-wiki/mediawiki-mcp-server@0.12.0`. */
 export interface RecipeMcpServerNpmSource {
   npm: string;
+}
+
+/** Cook-only: the server is already installed on the host outside cook (an
+ *  absolute `command` plus absolute script paths in `args`). Cook neither
+ *  fetches, builds, copies nor rewrites it, and records it in the host lock
+ *  as external — never with a commit. Refused by the docker backend. */
+export interface RecipeMcpServerExternalSource {
+  external: true;
 }
 
 /** Auxiliary credential / config file an MCP server reads at runtime.
@@ -648,7 +661,15 @@ export function validateRecipe(raw: unknown): Recipe {
             `mcpServers.${id}.source must set either 'npm' or 'url', not both`,
           );
         }
-        if (hasNpm) {
+        if (src.external !== undefined) {
+          // Cook-only marker: the whole block, never mixed with a real source.
+          if (src.external !== true || Object.keys(src).length !== 1) {
+            throw new Error(
+              `mcpServers.${id}.source.external must be exactly { "external": true } ` +
+              `— it cannot be combined with 'npm', 'url' or other source fields`,
+            );
+          }
+        } else if (hasNpm) {
           // npm-registry source: a single package spec, no git/build metadata.
           if (typeof src.npm !== 'string' || !src.npm) {
             throw new Error(`mcpServers.${id}.source.npm must be a non-empty string`);

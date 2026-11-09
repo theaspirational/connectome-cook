@@ -132,7 +132,7 @@ test('R1 role lookup: engine binding ignores clone array order', async () => {
   const actions = { clones: [
     { key: 'mcp', role: 'mcp' as const, url: repo, ref: 'main', target: '/mcp', buildCommand: 'make' },
     { key: 'host', role: 'connectome-host' as const, url: repo, ref: 'main', target: '/host', buildCommand: 'bun install' },
-  ], copies: [], skipped: [], localExtensionPaths: new Map<string, string>() };
+  ], copies: [], skipped: [], localExtensionPaths: new Map<string, string>(), external: [] };
   host.bindHostEngine(actions, bun);
   expect(actions.clones[0]!.buildCommand).toBe('make');
   expect(actions.clones[1]!.buildCommand).toBe(`'${bun}' install`);

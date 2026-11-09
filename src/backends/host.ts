@@ -40,7 +40,8 @@ import { knownSecretEnvironmentNames, sourceGitEnvironment, processAllowlistEnv 
 import { assertCredentialFreeSourceUrl, sourceLocation } from '../source-url.js';
 import { log } from '../log.js';
 import { shellQuote } from '../env-encoding.js';
-import type { GeneratorInput, McpSource } from '../types.js';
+import type { ExternalServer, GeneratorInput, McpSource } from '../types.js';
+import { detectExternalServers } from '../source-detector.js';
 import type { Recipe } from '../vendor/recipe.js';
 import type { InstallPlan } from '../plan.js';
 import { generateOverlays } from '../generators/overlay.js';
@@ -67,6 +68,7 @@ import {
   type PublicOutputDigest,
   resolveNpmComponents,
   serializeLockfile,
+  lockedExternalServers,
 } from '../lockfile.js';
 import { applyConnectorState, applyWorkspaceMounts, provisionLayout, type HostLayout, validateLayoutStdio, validateLayoutConsumers } from '../host-layout.js';
 import { writePrivateLayoutFile } from '../private-directory.js';
@@ -147,6 +149,8 @@ export interface HostActions {
   skipped: Array<{ key: string; reason: string }>;
   /** Extension name → in-place host entry path (local extensions). */
   localExtensionPaths: Map<string, string>;
+  /** Host-installed servers (`source.external`): launched as declared. */
+  external: ExternalServer[];
 }
 
 /** Map a source's container path onto the install dir: `/zulip_mcp` →
@@ -226,7 +230,7 @@ export function planHostActions(plan: InstallPlan, options: HostBackendOptions):
     localExtensionPaths.set(ext.name, join(ext.hostDir, ext.entryBasename));
   }
 
-  return { clones, copies, skipped, localExtensionPaths };
+  return { clones, copies, skipped, localExtensionPaths, external: detectExternalServers(plan.walks) };
 }
 
 /** Bind the host install command by role, independently of planner ordering. */
@@ -254,6 +258,11 @@ export function renderActionPreview(actions: HostActions, options: HostBackendOp
   }
   for (const s of actions.skipped) {
     lines.push(`  - SKIP ${s.key}: ${s.reason}`);
+  }
+  if (actions.external.length > 0) {
+    lines.push('');
+    lines.push('External MCP servers used as installed (source.external; not fetched, built or copied):');
+    for (const server of actions.external) lines.push(`  - ${server.name}: ${server.command}`);
   }
   if (actions.localExtensionPaths.size > 0) {
     lines.push('');
@@ -1141,6 +1150,7 @@ async function materializeHost(
       ...(engines ? { engines } : {}),
       ...(layout ? { layout, state: { path: layout.state } } : {}),
       ...(dependencies ? { hostDependencies: dependencies.records } : {}),
+      ...(actions.external.length ? { external: lockedExternalServers(actions.external) } : {}),
       recipePath: plan.recipePath,
       createdAt: new Date().toISOString(),
       connectomeHost, components: lockedComponents,
