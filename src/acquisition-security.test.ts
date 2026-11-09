@@ -510,7 +510,7 @@ test('a missing ref is distinguished from a failed remote and names the source',
   expect(existsSync(join(dir, 'out'))).toBe(false);
 });
 
-for (const ref of ['deadbee', '20241105', 'a'.repeat(39)]) {
+for (const ref of ['dead', 'deadb', 'deadbe', 'deadbee', '20241105', 'a'.repeat(39)]) {
   test(`hex-looking symbolic ref ${ref} is resolved, not trusted`, () => {
     const result = run('build', { url: 'https://example.invalid/component.git', ref }, ['--pin-refs']);
     expect(result.status).toBe(0);

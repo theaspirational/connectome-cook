@@ -192,13 +192,17 @@ ${log.bold('Flags:')}
   --node-path <absolute> Node for host builds and runtime PATH consumers
   --user-unit <name.service>
                          Export a user unit only (requires selected engines)
+  --host-dependency <name>=<abs-path>#sha256=<64 hex>
+                         Repeatable hash-pinned local archive input
+  --drop-host-dependencies
+                         Explicitly remove recorded local dependency pins
   --help, -h             Show this message
 `;
 
 async function handleInstall(argv: string[]): Promise<number> {
   const flags = mri(argv, {
-    boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates'],
-    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit', 'layout'],
+    boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates', 'drop-host-dependencies'],
+    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit', 'layout', 'host-dependency'],
     alias: { h: 'help' },
   });
 
@@ -282,6 +286,8 @@ async function handleInstall(argv: string[]): Promise<number> {
     userUnit: flags['user-unit'],
     bunPath: flags['bun-path'],
     nodePath: flags['node-path'],
+    hostDependencies: flags['host-dependency'],
+    dropHostDependencies: !!flags['drop-host-dependencies'],
     noPrompts: flags.prompts === false,
     yes: !!flags.yes,
     chRepoUrl,
@@ -642,6 +648,12 @@ export async function main(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
+  const commandArgs = argv.slice(1, argv.indexOf('--') === -1 ? undefined : argv.indexOf('--'));
+  for (const flag of ['--host-dependency', '--drop-host-dependencies']) {
+    if (first !== 'install' && commandArgs.some(arg => arg === flag || arg.startsWith(flag + '='))) {
+      throw new Error(`${flag} is only supported by install`);
+    }
+  }
   const handler = SUBCOMMANDS[first];
   if (!handler) {
     log.error(`unknown command: ${first}`);

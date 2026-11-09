@@ -325,6 +325,10 @@ connectome-cook/
 
 For now this lives in @Tengro's namespace. Once the CLI is meaningfully battle-tested against richer recipe trees (multi-source, BuildKit secrets, mixed install patterns), it'll be handed off to anima-research alongside connectome-host.
 
+Host installs: [hash-pinned local dependency inputs](docs/host-dependency.md).
+With `--host-dependency`, nested npm overrides (even unrelated ones) refuse
+before install writes; disjoint flat overrides and resolutions remain supported.
+
 ## License
 
 Apache 2.0. See [LICENSE](./LICENSE).

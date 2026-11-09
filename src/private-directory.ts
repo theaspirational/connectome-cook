@@ -3,8 +3,8 @@
  * Writable ancestors must be sticky and owned by root or the effective user.
  * Foreign non-root ancestors always refuse; the root must be 0700.
  * Same-uid processes are trusted. */
-import { dirname } from 'node:path';
-import { closeSync, constants as F, fchmodSync, fstatSync, fsyncSync, mkdirSync, openSync, writeFileSync, renameSync, unlinkSync, type Stats } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { closeSync, constants as F, fchmodSync, fstatSync, fsyncSync, lstatSync, readlinkSync, realpathSync, mkdirSync, openSync, writeFileSync, renameSync, unlinkSync, type Stats } from 'node:fs';
 class PrivateDirectoryError extends Error {}
 export function privatePathParts(path: string): string[] {
   const parts = path.split('/');
@@ -12,27 +12,66 @@ export function privatePathParts(path: string): string[] {
   return parts;
 }
 
-export function provisionPrivateDirectory(root: string, create = true): Stats | undefined {
+function dependencyPathParts(path: string): string[] {
+  const parts = path.split('/');
+  if (parts.some(part => !part || part === '.' || part === '..' || /[\\\0]/.test(part))) throw new PrivateDirectoryError('E_PRIVATE_PATH');
+  return parts;
+}
+
+/** Resolve existing ancestors without trusting links controlled by another user.
+ * Missing suffixes are preserved, so preflight never creates directories. */
+export function resolvePrivateDirectoryPath(root: string): string {
+  if (!root.startsWith('/')) throw new PrivateDirectoryError('E_PRIVATE_PATH');
+  let parts = dependencyPathParts(root.slice(1)), current = '/', links = 0;
+  while (parts.length) {
+    const part = parts.shift()!;
+    if (part === '..') { current = dirname(current); continue; }
+    const path = join(current, part);
+    let stat;
+    try { stat = lstatSync(path); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return join(realpathSync(current), part, ...parts);
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      if (stat.uid !== 0 && stat.uid !== process.geteuid?.()) throw new PrivateDirectoryError('E_PRIVATE_LINK_OWNER');
+      if (++links > 40) throw new PrivateDirectoryError('E_PRIVATE_PATH');
+      const target = readlinkSync(path);
+      // Walk target components before resolving '..': a target may itself
+      // traverse a link, whose owner must be checked too.
+      parts = [...target.split('/').filter(part => part && part !== '.'), ...parts];
+      if (target.startsWith('/')) current = '/';
+    } else {
+      if (!stat.isDirectory()) throw new PrivateDirectoryError('E_PRIVATE_PATH');
+      current = path;
+    }
+  }
+  return realpathSync(current);
+}
+
+/** Split layouts reject all symlinks and unsafe ancestors. Dependency storage
+ * retains its canonical, trusted-link policy and permits nonprivate ancestors. */
+export function provisionPrivateDirectory(root: string, create = true, policy: 'layout' | 'dependency' = 'layout'): Stats | undefined {
   const dirs: number[] = [];
   try {
     if (process.platform !== 'linux' || process.geteuid?.() === undefined) throw new PrivateDirectoryError('E_PRIVATE_UNSUPPORTED');
     if (typeof root !== 'string' || !root.startsWith('/')) throw new PrivateDirectoryError('E_PRIVATE_PATH');
-    const parts = privatePathParts(root.slice(1));
+    const parts = policy === 'dependency' ? dependencyPathParts(resolvePrivateDirectoryPath(root).slice(1)) : privatePathParts(root.slice(1));
     let fd = openSync('/', F.O_RDONLY | F.O_DIRECTORY | F.O_NOFOLLOW); dirs.push(fd);
     // Missing /proc must not masquerade as a missing declared root.
     const probe = openSync('/proc/self/fd/' + fd, F.O_RDONLY | F.O_DIRECTORY);
     closeSync(probe);
-    for (const part of parts) {
+    for (const [index, part] of parts.entries()) {
       const ancestor = fstatSync(fd);
       const trustedOwner = ancestor.uid === 0 || ancestor.uid === process.geteuid!();
-      if (!trustedOwner || ((ancestor.mode & 0o022) && !(ancestor.mode & 0o1000))) throw new PrivateDirectoryError('E_PRIVATE_ANCESTOR');
+      if (policy === 'layout' && (!trustedOwner || ((ancestor.mode & 0o022) && !(ancestor.mode & 0o1000)))) throw new PrivateDirectoryError('E_PRIVATE_ANCESTOR');
       const path = '/proc/self/fd/' + fd + '/' + part;
       let next: number;
       try { next = openSync(path, F.O_RDONLY | F.O_DIRECTORY | F.O_NOFOLLOW); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         if (!create) return;
-        mkdirSync(path, { mode: 0o700 });
+        mkdirSync(path, { mode: policy === 'layout' || index === parts.length - 1 ? 0o700 : 0o777 });
         fsyncSync(fd);
         next = openSync(path, F.O_RDONLY | F.O_DIRECTORY | F.O_NOFOLLOW);
       }

@@ -47,6 +47,8 @@ export interface Lockfile {
   layout?: import('./host-layout.js').HostLayout;
   /** Operator-selected engines, validated against the acquired host. */
   engines?: import('./host-engines.js').HostEngines;
+  /** Hash-pinned local inputs and explicit pre-install package.json edits. */
+  hostDependencies?: import('./host-dependency.js').LockedHostDependency[];
   /** Which backend materialized this directory. */
   backend: 'docker' | 'host';
   /** The recipe path/URL the operator named at resolve time. */

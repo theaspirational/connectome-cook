@@ -65,7 +65,7 @@ export function resolveRemoteRef(
     const sha = output.split('\n')[0]?.split('\t')[0]?.trim();
     if (sha && looksLikeSha(sha)) return sha;
   }
-  if (/^[0-9a-f]{7,39}$/i.test(ref)) {
+  if (/^[0-9a-f]{4,39}$/i.test(ref)) {
     throw new Error(`--pin-refs: ${location}: '${ref}' looks like an abbreviated commit ID; --pin-refs needs the full 40-hex ID (git rev-parse ${ref}); no output written.`);
   }
   return null;
