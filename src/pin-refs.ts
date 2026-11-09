@@ -11,6 +11,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { sourceGitEnvironment } from './process-env.js';
 import { assertCredentialFreeSourceUrl, sourceLocation } from './source-url.js';
 import { log } from './log.js';
 import type { McpSource } from './types.js';
@@ -32,15 +33,18 @@ export function candidateRefNames(ref: string): string[] {
  */
 export function resolveRemoteRef(
   url: string, ref: string, sslBypass = false, location = 'Source URL',
+  authSecret?: string, values?: NodeJS.ProcessEnv, excluded?: Iterable<string>,
 ): string | null {
   assertCredentialFreeSourceUrl(url, location);
   if (looksLikeSha(ref)) return ref.toLowerCase();
+  const env = sourceGitEnvironment(url, authSecret, values, location, undefined, excluded);
   for (const candidate of candidateRefNames(ref)) {
     const args = [...(sslBypass ? ['-c', 'http.sslVerify=false'] : []), 'ls-remote', url, candidate];
     let output: string;
     try {
       output = execFileSync('git', args, {
         encoding: 'utf-8',
+        env,
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 30_000,
       });
@@ -69,10 +73,13 @@ export function resolveRemoteRef(
 
 /**
  * Pin every git source in place (sets `source.commit`). Skips registry,
- * sibling-copy, and already-pinned entries. Private symbolic refs are
- * refused: pinning does not implement an authSecret handoff.
+ * sibling-copy, and already-pinned entries. Private symbolic refs use
+ * the same environment-only authSecret channel as host acquisition.
  */
-export function pinSources(sources: McpSource[]): void {
+export function pinSources(
+  sources: McpSource[], values?: NodeJS.ProcessEnv,
+  excluded: Iterable<string> = sources.flatMap(source => source.authSecret ? [source.authSecret] : []),
+): void {
   for (const source of sources) {
     const location = sourceLocation(source);
     assertCredentialFreeSourceUrl(source.url, `${location}.url`);
@@ -82,10 +89,7 @@ export function pinSources(sources: McpSource[]): void {
       source.commit = source.ref.toLowerCase();
       continue;
     }
-    if (source.authSecret) {
-      throw new Error(`--pin-refs: ${location}: cannot resolve private refs with authSecret; supply a full commit SHA.`);
-    }
-    const sha = resolveRemoteRef(source.url, source.ref, source.sslBypass, location);
+    const sha = resolveRemoteRef(source.url, source.ref, source.sslBypass, location, source.authSecret, values, excluded);
     if (sha) {
       source.commit = sha;
       log.info(`--pin-refs: ${log.dim(source.url)}@${source.ref} → ${sha.slice(0, 12)}`);

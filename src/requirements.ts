@@ -6,7 +6,8 @@
  * the first hit, lets the operator confirm/override, and exposes the answer
  * as an env var (`exposeAs`, default: the key upper-snake-cased). The value
  * then flows like any other operator value: `${VAR}` substitution at
- * runtime, install-step environment at build time.
+ * runtime. Host builds require explicit COOK_PASS_ENV selection of a parent
+ * value; resolved requirements are never injected into build environments.
  *
  * Resolution precedence per requirement: env-file value > process.env value
  * > probe hit (confirmed interactively unless --no-prompts) > prompt with

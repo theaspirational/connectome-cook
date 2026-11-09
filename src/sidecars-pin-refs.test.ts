@@ -196,7 +196,7 @@ describe('pin-refs', () => {
     expect(resolveRemoteRef('https://invalid.invalid/x.git', head)).toBe(head);
   });
 
-  test('pinSources pins plain git sources, skips registry and refuses private symbolic refs', () => {
+  test('pinSources pins plain git sources, skips registry and requires private credentials', () => {
     const repo = join(dir, 'repo2');
     execFileSync('git', ['init', '-q', '-b', 'main', repo]);
     writeFileSync(join(repo, 'f.txt'), 'x');
@@ -218,7 +218,7 @@ describe('pin-refs', () => {
     const registry = mk({ key: 'npm:p', url: '', install: { kind: 'npm-global', package: 'p' } });
     const shaRef = mk({ key: 'sha', ref: head });
     pinSources([plain, registry, shaRef]);
-    expect(() => pinSources([priv])).toThrow('cannot resolve private refs');
+    expect(() => pinSources([priv])).toThrow('authSecret');
 
     expect(plain.commit).toBe(head);
     expect(priv.commit).toBeUndefined();

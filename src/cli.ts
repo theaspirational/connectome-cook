@@ -21,6 +21,7 @@ import {
   DEFAULT_CH_REPO_URL,
   runHostBackend,
 } from './backends/host.js';
+import { knownSecretEnvironmentNames } from './process-env.js';
 import { pinSources, resolveRemoteRef } from './pin-refs.js';
 import { listTemplates, scaffoldRecipe, type TemplateName } from './init.js';
 
@@ -125,9 +126,10 @@ async function runBuildPipeline(argv: string[]): Promise<BuildResult> {
   let pinnedChRef: string | undefined;
   if (flags['pin-refs']) {
     log.step('pinning refs (git ls-remote)');
-    pinSources(planResult.plan.sources);
+    const excluded = knownSecretEnvironmentNames(planResult.plan);
+    pinSources(planResult.plan.sources, planResult.plan.values, excluded);
     const chLocation = `connectome-host (${DEFAULT_CH_REPO_URL})`;
-    const chSha = resolveRemoteRef(DEFAULT_CH_REPO_URL, DEFAULT_CH_REF, false, chLocation);
+    const chSha = resolveRemoteRef(DEFAULT_CH_REPO_URL, DEFAULT_CH_REF, false, chLocation, undefined, undefined, excluded);
     if (chSha) {
       pinnedChRef = chSha;
       log.info(`--pin-refs: ${chLocation}@${DEFAULT_CH_REF} → ${chSha.slice(0, 12)}`);
@@ -159,6 +161,8 @@ under the install dir, resolves host requirements (probe + confirm), writes
 the lowered configurations, a sourceable .env, a run.sh launcher, and
 ${log.dim('connectome.lock')}.  Re-running reconciles: components unchanged in the
 lock are kept, everything else is re-cloned.
+COOK_PASS_ENV selects extra parent environment names (comma/space-separated)
+for build tools without persisting their values.
 
 ${log.bold('SAFETY:')} unlike \`cook build\`, install commands run ON THIS MACHINE.
 The full action plan is printed and confirmed first.  Non-interactive runs
@@ -214,9 +218,10 @@ async function handleInstall(argv: string[]): Promise<number> {
   let chCommit: string | undefined;
   if (flags['pin-refs']) {
     log.step('pinning refs (git ls-remote)');
-    pinSources(planResult.plan.sources);
+    const excluded = knownSecretEnvironmentNames(planResult.plan);
+    pinSources(planResult.plan.sources, planResult.plan.values, excluded);
     const chLocation = `connectome-host (${chRepoUrl})`;
-    const chSha = resolveRemoteRef(chRepoUrl, chRef, false, chLocation);
+    const chSha = resolveRemoteRef(chRepoUrl, chRef, false, chLocation, undefined, undefined, excluded);
     if (chSha) {
       chCommit = chSha;
       log.info(`--pin-refs: ${chLocation}@${chRef} → ${chSha.slice(0, 12)}`);
