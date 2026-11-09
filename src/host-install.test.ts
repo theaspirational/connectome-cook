@@ -5,10 +5,11 @@
  * only through the pure planner — never run in tests.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  runHostBackend,
   hostBuildCommand,
   hostPathFor,
   isSatisfiedByLock,
@@ -281,4 +282,17 @@ describe('isSatisfiedByLock', () => {
   test('never satisfied when the target directory is gone', () => {
     expect(isSatisfiedByLock(mkAction({ target: '/nonexistent-dir-xyz' }), mkLock())).toBe(false);
   });
+});
+
+for (const kind of ['clone', 'copy', 'sidecar-template'] as const) for (const path of ['/.cook-engines', '/.cook-engines/bin/node']) test(`R3-3 ${kind} target ${path} is reserved before confirmation`, async () => {
+  const plan = minimalPlan(kind === 'sidecar-template' ? {} : { sources: [mcpSource({
+    inContainerPath: path,
+    ...(kind === 'copy' ? { install: { kind: 'sibling-copy', siblingDir: 'fixture' } } : {}),
+  })] });
+  if (kind === 'sidecar-template') plan.parentWalk.recipe.services = [{
+    name: 'fixture', image: 'fixture', templateFiles: [{ path: path.slice(1), template: 'hello-template' }],
+  }];
+  const installDir = join(dir, 'install');
+  await expect(runHostBackend(plan, { ...OPTIONS, installDir, yes: false })).rejects.toThrow('E_HOST_ENGINE_RESERVED:');
+  expect(existsSync(installDir)).toBe(false);
 });

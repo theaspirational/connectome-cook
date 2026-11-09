@@ -41,6 +41,10 @@ export interface LockedRequirement {
 
 export interface Lockfile {
   version: 1;
+  /** A confirmed reinstall started but has not completed successfully. */
+  incomplete?: true;
+  /** Operator-selected engines, validated against the acquired host. */
+  engines?: import('./host-engines.js').HostEngines;
   /** Which backend materialized this directory. */
   backend: 'docker' | 'host';
   /** The recipe path/URL the operator named at resolve time. */

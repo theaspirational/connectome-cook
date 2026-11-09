@@ -180,13 +180,15 @@ ${log.bold('Flags:')}
   --env-file <path>      Read variable values from this file before prompting
   --ch-repo <url>        connectome-host repo (default: ${DEFAULT_CH_REPO_URL})
   --ch-ref <ref>         connectome-host ref (default: ${DEFAULT_CH_REF})
+  --bun-path <absolute>  Validate host engines (requires --node-path)
+  --node-path <absolute> Node for host builds and command: node servers
   --help, -h             Show this message
 `;
 
 async function handleInstall(argv: string[]): Promise<number> {
   const flags = mri(argv, {
     boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates'],
-    string: ['out', 'env-file', 'ch-repo', 'ch-ref'],
+    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path'],
     alias: { h: 'help' },
   });
 
@@ -217,16 +219,21 @@ async function handleInstall(argv: string[]): Promise<number> {
   // to a SHA before executing; clones check out the exact commits.
   let chCommit: string | undefined;
   if (flags['pin-refs']) {
-    log.step('pinning refs (git ls-remote)');
+    log.step(flags['bun-path'] !== undefined || flags['node-path'] !== undefined
+      ? 'pinning component refs (git ls-remote); host bound by engine preflight'
+      : 'pinning refs (git ls-remote)');
     const excluded = knownSecretEnvironmentNames(planResult.plan);
     pinSources(planResult.plan.sources, planResult.plan.values, excluded);
-    const chLocation = `connectome-host (${chRepoUrl})`;
-    const chSha = resolveRemoteRef(chRepoUrl, chRef, false, chLocation, undefined, undefined, excluded);
-    if (chSha) {
-      chCommit = chSha;
-      log.info(`--pin-refs: ${chLocation}@${chRef} → ${chSha.slice(0, 12)}`);
-    } else {
-      throw new Error(`--pin-refs: ${chLocation}: ref not found: ${chRef}; no output written.`);
+    // Engine preflight fetches and binds the host itself; avoid ls-remote too.
+    if (flags['bun-path'] === undefined && flags['node-path'] === undefined) {
+      const chLocation = `connectome-host (${chRepoUrl})`;
+      const chSha = resolveRemoteRef(chRepoUrl, chRef, false, chLocation, undefined, undefined, excluded);
+      if (chSha) {
+        chCommit = chSha;
+        log.info(`--pin-refs: ${chLocation}@${chRef} → ${chSha.slice(0, 12)}`);
+      } else {
+        throw new Error(`--pin-refs: ${chLocation}: ref not found: ${chRef}; no output written.`);
+      }
     }
   }
 
@@ -236,6 +243,8 @@ async function handleInstall(argv: string[]): Promise<number> {
   );
   const result = await runHostBackend(planResult.plan, {
     installDir,
+    bunPath: flags['bun-path'],
+    nodePath: flags['node-path'],
     noPrompts: flags.prompts === false,
     yes: !!flags.yes,
     chRepoUrl,
@@ -289,6 +298,10 @@ function launchFromLock(dir: string, passthroughArgs: string[]): Promise<number>
   }
   if (!lock) {
     log.error(`${dir}: no ${LOCKFILE_NAME} — nothing to launch`);
+    return Promise.resolve(1);
+  }
+  if (lock.incomplete) {
+    log.error(`${dir}: last install failed; re-run \`cook install\``);
     return Promise.resolve(1);
   }
   let command: string;
