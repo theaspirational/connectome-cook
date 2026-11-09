@@ -271,8 +271,11 @@ The record adds:
 - `external` (host only, omitted when empty): servers marked
   `"source": { "external": true }`, as sorted `{name, command}` records. The
   marker declares a server already installed on the host: a literal absolute
-  `command` and absolute path-like `args` (npx/uvx, relative or `${VAR}` paths
-  are refused, as is mixing it with `url`/`npm`). Cook accepts it under
+  `command` and absolute path-like `args` (relative or `${VAR}` paths are
+  refused, as is mixing it with `url`/`npm`). Fetch-and-run launches are
+  refused at any path: a command named npx, uvx, npm, pnpm, yarn, bunx or
+  pipx, or a bun/node command whose first arg is one of those entry points
+  or the subcommand `x`, `dlx` or `exec`. Cook accepts it under
   `--strict` but never fetches, builds, copies, rewrites or binds
   `connectorState` to it, and claims no commit. Env and args are never
   recorded. The docker backend refuses the marker.

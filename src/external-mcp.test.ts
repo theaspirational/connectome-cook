@@ -93,6 +93,13 @@ test('the marker refuses runtime fetchers, relative or substituted paths and web
     [{ command: NODE, args: ['index.js'] }, 'arg "index.js"'],
     [{ command: NODE, args: ['--config=./config.json'] }, 'arg "--config=./config.json"'],
     [{ command: NODE, args: ['${HOME}/index.js'] }, 'arg "${HOME}/index.js"'],
+    [{ command: '/opt/${X}/node', args: ['/opt/x/index.js'] }, 'command "/opt/${X}/node" must be a literal absolute path'],
+    [{ command: NODE, args: ['/opt/${X}/index.js'] }, 'arg "/opt/${X}/index.js" must be a literal absolute path'],
+    [{ command: '/usr/bin/npx', args: ['-y', 'some-mcp'] }, "command '/usr/bin/npx' fetches at runtime"],
+    [{ command: '/usr/local/bin/uvx', args: ['some-mcp'] }, "command '/usr/local/bin/uvx' fetches at runtime"],
+    [{ command: '/usr/bin/pnpm', args: ['dlx', 'some-mcp'] }, "command '/usr/bin/pnpm' fetches at runtime"],
+    [{ command: '/opt/bun/bin/bun', args: ['x', 'some-mcp'] }, "command '/opt/bun/bin/bun' fetches at runtime"],
+    [{ command: NODE, args: ['/usr/lib/node_modules/npm/bin/npx-cli.js', 'some-mcp'] }, `command '${NODE}' fetches at runtime`],
     [{ url: 'ws://127.0.0.1:1/' }, 'requires a stdio command'],
   ] as const) {
     expect(() => detectSources(walks({ s: { ...server, ...external } }), { strict: true })).toThrow(message);
@@ -100,6 +107,8 @@ test('the marker refuses runtime fetchers, relative or substituted paths and web
   }
   // Flags, URLs and plain words are not paths.
   expect(detectExternalServers(walks({ s: { command: NODE, args: ['--stdio', '-v', 'serve', 'https://example.test/x', '/opt/x/index.js'], ...external } }))).toHaveLength(1);
+  // A fetcher name later in args is just an argument.
+  expect(detectExternalServers(walks({ s: { command: '/opt/bun/bin/bun', args: ['/opt/x/index.js', 'x'], ...external } }))).toHaveLength(1);
 });
 
 test('the marker is a whole source block: never combined with a real source', () => {

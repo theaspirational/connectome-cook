@@ -249,7 +249,7 @@ function pathLikeArg(arg: string): string | undefined {
 
 function externalServerProblem(server: RecipeMcpServer): string | undefined {
   if (!server.command || server.url) return 'external requires a stdio command, not a url';
-  if (isRuntimeFetchCommand(server.command)) {
+  if (isRuntimeFetchCommand(server.command) || isExternalFetchLaunch(server.command, server.args)) {
     return `command '${server.command}' fetches at runtime; use source.npm or drop the external marker`;
   }
   const literalAbsolute = (value: string) => isAbsolute(value) && !value.includes('${');
@@ -263,6 +263,23 @@ function externalServerProblem(server: RecipeMcpServer): string | undefined {
     }
   }
   return undefined;
+}
+
+/** Package-manager front ends that fetch and run a package on demand. */
+const EXTERNAL_FETCH_TOOLS = new Set(['npx', 'uvx', 'npm', 'pnpm', 'yarn', 'bunx', 'pipx']);
+/** Runtime subcommands that do the same (`bun x`, `pnpm dlx`, `npm exec`). */
+const EXTERNAL_FETCH_SUBCOMMANDS = new Set(['x', 'dlx', 'exec']);
+
+/**
+ * Stricter than isRuntimeFetchCommand, for the external marker only: refuse
+ * a fetcher by basename (`/usr/bin/npx`), and a bun/node binary whose first
+ * arg is a fetcher entry point or a fetch subcommand (`bun x pkg`).
+ */
+function isExternalFetchLaunch(command: string, args: readonly string[] | undefined): boolean {
+  if (EXTERNAL_FETCH_TOOLS.has(basename(command))) return true;
+  if (!['bun', 'node'].includes(basename(command)) || !args?.[0]) return false;
+  const first = basename(args[0]).replace(/(?:-cli)?\.[cm]?js$/, '');
+  return EXTERNAL_FETCH_TOOLS.has(first) || EXTERNAL_FETCH_SUBCOMMANDS.has(args[0]);
 }
 
 /**
