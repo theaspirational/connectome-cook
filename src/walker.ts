@@ -53,12 +53,15 @@ function getFleetChildren(recipe: Recipe): RecipeFleetChild[] {
 
 /**
  * Walk a recipe tree starting from `rootPath`.
+ * A supplied parentRecipe must be the recipe read from that same root; it is
+ * reused only for the normalized root of this call, never for children.
  *
  * Returns a flat array `[parent, ...descendants]` in depth-first declaration
  * order, deduplicated by absolute resolved path. Cycles are handled by
  * skipping already-visited entries (no error, no infinite loop).
  */
-export async function walkRecipe(rootPath: string): Promise<WalkResult[]> {
+export async function walkRecipe(rootPath: string, parentRecipe?: Recipe): Promise<WalkResult[]> {
+  const normalizedRoot = normalizeRoot(rootPath);
   const results: WalkResult[] = [];
   const visited = new Set<string>();
 
@@ -66,7 +69,7 @@ export async function walkRecipe(rootPath: string): Promise<WalkResult[]> {
     if (visited.has(loc)) return;
     visited.add(loc);
 
-    const recipe = await loadRecipeRaw(loc);
+    const recipe = loc === normalizedRoot && parentRecipe ? parentRecipe : await loadRecipeRaw(loc);
     results.push({ path: loc, recipe });
 
     const base = sourceBaseFor(loc);
@@ -76,6 +79,6 @@ export async function walkRecipe(rootPath: string): Promise<WalkResult[]> {
     }
   }
 
-  await visit(normalizeRoot(rootPath));
+  await visit(normalizedRoot);
   return results;
 }

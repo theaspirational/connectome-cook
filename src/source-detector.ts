@@ -35,6 +35,8 @@ import type {
 
 export interface DetectOptions {
   strict: boolean;
+  /** Receives complete warning text; defaults to stderr. */
+  warn?: (message: string) => void;
 }
 
 /**
@@ -120,8 +122,9 @@ function warnConflict(
   field: string,
   first: { ref: SourceRef; value: string },
   next: { ref: SourceRef; value: string },
+  warn: (message: string) => void,
 ): void {
-  process.stderr.write(
+  warn(
     `[source-detector] WARN: source ${key} has divergent ${field} — ` +
       `${first.ref.recipePath}#${first.ref.mcpServerName} says ${first.value}, ` +
       `${next.ref.recipePath}#${next.ref.mcpServerName} says ${next.value}; ` +
@@ -140,6 +143,7 @@ export function detectSources(
   walks: WalkResult[],
   options: DetectOptions,
 ): McpSource[] {
+  const warn = options.warn ?? (message => { process.stderr.write(message); });
   /** Insertion-ordered map of dedup key → source under construction. */
   const byKey = new Map<string, McpSource>();
   /** Unresolved entries to either error on (strict) or shim (non-strict). */
@@ -156,7 +160,7 @@ export function detectSources(
         if (isNpmRegistrySource(server.source)) {
           addNpmRegistrySource(byKey, server.source, ref);
         } else {
-          addSourcedServer(byKey, server.source, ref);
+          addSourcedServer(byKey, server.source, ref, warn);
         }
         continue;
       }
@@ -217,6 +221,7 @@ function addSourcedServer(
   byKey: Map<string, McpSource>,
   source: RecipeMcpServerGitSource,
   ref: SourceRef,
+  warn: (message: string) => void,
 ): void {
   assertCredentialFreeSourceUrl(source.url, `${ref.recipePath} :: mcpServers.${ref.mcpServerName}.source.url`);
   const refStr = source.ref ?? 'main';
@@ -251,6 +256,7 @@ function addSourcedServer(
       'url',
       { ref: firstRef, value: existing.url },
       { ref, value: source.url },
+      warn,
     );
   }
   if (!installEquals(existing.install, install)) {
@@ -259,6 +265,7 @@ function addSourcedServer(
       'install',
       { ref: firstRef, value: describeInstall(existing.install) },
       { ref, value: describeInstall(install) },
+      warn,
     );
   }
   if ((existing.sslBypass ?? false) !== (source.sslBypass ?? false)) {
@@ -267,6 +274,7 @@ function addSourcedServer(
       'sslBypass',
       { ref: firstRef, value: String(existing.sslBypass ?? false) },
       { ref, value: String(source.sslBypass ?? false) },
+      warn,
     );
   }
   if ((existing.authSecret ?? '') !== (source.authSecret ?? '')) {
@@ -275,6 +283,7 @@ function addSourcedServer(
       'authSecret',
       { ref: firstRef, value: existing.authSecret ?? '(none)' },
       { ref, value: source.authSecret ?? '(none)' },
+      warn,
     );
   }
   if (existing.inContainerPath !== inContainerPath) {
@@ -283,6 +292,7 @@ function addSourcedServer(
       'inContainerPath',
       { ref: firstRef, value: existing.inContainerPath },
       { ref, value: inContainerPath },
+      warn,
     );
   }
 

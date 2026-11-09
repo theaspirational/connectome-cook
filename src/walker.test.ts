@@ -84,3 +84,30 @@ describe('walkRecipe', () => {
     });
   });
 });
+
+describe('preloaded root recipe', () => {
+  test('normalized root is reused without a re-read, but children load from disk', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cook-preloaded-'));
+    try {
+      // No root file exists: any attempted root read would fail.
+      const parent = { name: 'preloaded', agent: { systemPrompt: 'root' },
+        modules: { fleet: { children: [{ name: 'child', recipe: './child.json' }] } } };
+      writeFileSync(join(dir, 'child.json'), JSON.stringify({ name: 'disk child', agent: { systemPrompt: 'child' } }));
+      const walks = await walkRecipe(join(dir, 'sub', '..', 'root.json'), parent);
+      expect(walks.map(w => w.path)).toEqual([join(dir, 'root.json'), join(dir, 'child.json')]);
+      expect(walks[0]?.recipe).toBe(parent);
+      expect(walks[1]?.recipe.name).toBe('disk child');
+      expect(walks[1]?.recipe).not.toBe(parent);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  test('a subsequent different root without a supplied parent is loaded normally', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cook-other-root-'));
+    try {
+      const parent = { name: 'preloaded', agent: { systemPrompt: 'root' } };
+      await walkRecipe(join(dir, 'root.json'), parent);
+      const other = join(dir, 'other.json');
+      writeFileSync(other, JSON.stringify({ name: 'other disk root', agent: { systemPrompt: 'other' } }));
+      expect((await walkRecipe(other))[0]?.recipe.name).toBe('other disk root');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

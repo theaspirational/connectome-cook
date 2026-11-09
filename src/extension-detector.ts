@@ -42,6 +42,8 @@ import type { RecipeExtension, RecipeMcpServerGitSource } from './vendor/recipe.
 
 export interface DetectExtensionsOptions {
   strict: boolean;
+  /** Receives complete warning text; defaults to stderr. */
+  warn?: (message: string) => void;
 }
 
 export interface DetectedExtensions {
@@ -74,8 +76,8 @@ function normalizeEntry(path: string): string {
   return path.replace(/^\.\//, '').replace(/\/{2,}/g, '/');
 }
 
-function warnDivergent(name: string, field: string, first: string, next: string): void {
-  process.stderr.write(
+function warnDivergent(warn: (message: string) => void, name: string, field: string, first: string, next: string): void {
+  warn(
     `[extension-detector] WARN: extension "${name}" has divergent ${field} — ` +
     `"${first}" vs "${next}"; keeping the first.\n`,
   );
@@ -90,6 +92,7 @@ export function detectExtensions(
   walks: WalkResult[],
   options: DetectExtensionsOptions,
 ): DetectedExtensions {
+  const warn = options.warn ?? (message => { process.stderr.write(message); });
   const gitByName = new Map<string, McpSource>();
   const localByName = new Map<string, LocalExtension>();
   /** Entries cook cannot bake: absolute path without source. */
@@ -106,7 +109,7 @@ export function detectExtensions(
       const ref: SourceRef = { recipePath: walk.path, mcpServerName: name };
 
       if (ext.source) {
-        addGitExtension(gitByName, localByName, name, ext, ref, errors);
+        addGitExtension(gitByName, localByName, name, ext, ref, errors, warn);
         continue;
       }
 
@@ -124,7 +127,7 @@ export function detectExtensions(
         continue;
       }
 
-      addLocalExtension(localByName, gitByName, walk.path, name, ext, ref, errors);
+      addLocalExtension(localByName, gitByName, walk.path, name, ext, ref, errors, warn);
     }
   }
 
@@ -151,7 +154,7 @@ export function detectExtensions(
     );
   } else {
     for (const u of unbakeable) {
-      process.stderr.write(
+      warn(
         `[extension-detector] WARN: ${u.recipePath} :: extensions.${u.name} has absolute path ` +
         `${u.path} and no source — not baked; the operator must bind-mount the code at that path.\n`,
       );
@@ -175,6 +178,7 @@ function addGitExtension(
   ext: RecipeExtension,
   ref: SourceRef,
   errors: string[],
+  warn: (message: string) => void,
 ): void {
   const source = ext.source!;
   assertCredentialFreeSourceUrl(source.url, `${ref.recipePath} :: extensions.${name}.source.url`);
@@ -196,9 +200,9 @@ function addGitExtension(
   const entry = normalizeEntry(ext.path);
   const existing = gitByName.get(name);
   if (existing) {
-    if (existing.url !== source.url) warnDivergent(name, 'source.url', existing.url, source.url);
-    if (existing.ref !== (source.ref ?? 'main')) warnDivergent(name, 'source.ref', existing.ref, source.ref ?? 'main');
-    if (existing.entry !== entry) warnDivergent(name, 'path', existing.entry ?? '', entry);
+    if (existing.url !== source.url) warnDivergent(warn, name, 'source.url', existing.url, source.url);
+    if (existing.ref !== (source.ref ?? 'main')) warnDivergent(warn, name, 'source.ref', existing.ref, source.ref ?? 'main');
+    if (existing.entry !== entry) warnDivergent(warn, name, 'path', existing.entry ?? '', entry);
     if (source.systemPackages && source.systemPackages.length > 0) {
       existing.systemPackages = [
         ...new Set([...(existing.systemPackages ?? []), ...source.systemPackages]),
@@ -232,6 +236,7 @@ function addLocalExtension(
   ext: RecipeExtension,
   ref: SourceRef,
   errors: string[],
+  warn: (message: string) => void,
 ): void {
   if (gitByName.has(name)) {
     errors.push(
@@ -254,9 +259,9 @@ function addLocalExtension(
 
   const existing = localByName.get(name);
   if (existing) {
-    if (existing.hostDir !== hostDir) warnDivergent(name, 'directory', existing.hostDir, hostDir);
+    if (existing.hostDir !== hostDir) warnDivergent(warn, name, 'directory', existing.hostDir, hostDir);
     if (existing.entryBasename !== entryBasename) {
-      warnDivergent(name, 'entry file', existing.entryBasename, entryBasename);
+      warnDivergent(warn, name, 'entry file', existing.entryBasename, entryBasename);
     }
     existing.refs.push(ref);
     return;
