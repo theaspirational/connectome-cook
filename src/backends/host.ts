@@ -33,7 +33,7 @@
  */
 
 import { execFileSync, execSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import promptsLib from 'prompts';
 import { knownSecretEnvironmentNames, sourceGitEnvironment, processAllowlistEnv } from '../process-env.js';
@@ -59,10 +59,14 @@ import {
   type Lockfile,
   type LockedComponent,
 } from '../lockfile.js';
+import { renderUserUnit, validateUserUnit } from '../host-unit.js';
+import { assertHostEnginePath } from '../host-engine-path.js';
 import type { HostEngines, HostEnginePreflight } from '../host-engines.js';
 import type { BuildResult } from './docker.js';
 
 export interface HostBackendOptions {
+  /** Export a static user unit under the installation; never install/start it. */
+  userUnit?: string;
   /** Both absolute paths opt into fail-closed host engine validation. */
   bunPath?: string;
   /** Absolute Node path, required together with bunPath. */
@@ -419,6 +423,11 @@ export function renderLauncher(
     '  set -a; . ./.env; set +a',
     'fi',
   ];
+  if (opts.engines) {
+    // Match selected-engine builds without importing unrelated engine siblings.
+    // PWD is the install root here; .env has already been sourced.
+    lines.push('export PATH="$PWD/.cook-engines/bin${PATH:+:$PATH}"');
+  }
   if (opts.hasSidecars) {
     lines.push(
       '',
@@ -471,9 +480,14 @@ export async function runHostBackend(
     assertCredentialFreeSourceUrl(source.url, `${sourceLocation(source)}.url`);
     sourceGitEnvironment(source.url, source.authSecret, plan.values, sourceLocation(source), undefined, excluded);
   }
+  if (options.userUnit !== undefined) {
+    if (!options.bunPath || !options.nodePath) throw new Error('E_HOST_UNIT: --user-unit requires both --bun-path and --node-path');
+    validateUserUnit(options.userUnit);
+    renderUserUnit(options.installDir, options.userUnit);
+  }
   if (options.bunPath !== undefined || options.nodePath !== undefined) {
     if (!options.bunPath || !options.nodePath) throw new Error('E_HOST_ENGINE_PATH: both --bun-path and --node-path are required');
-    if (resolve(options.installDir).includes(':')) throw new Error('E_HOST_ENGINE_PATH: selected-engine install path must not contain ":" (build PATH separator)');
+    assertHostEnginePath(resolve(options.installDir));
     const { preflightHostEngines } = await import('../host-engines.js').catch(() => {
       throw new Error('E_HOST_ENGINE_DEPENDENCY: cannot load engine preflight dependencies; run bun install');
     });
@@ -509,6 +523,7 @@ async function materializeHost(
   let engines = checked?.engines;
   const excluded = knownSecretEnvironmentNames(plan);
   const buildEnv = processAllowlistEnv();
+  const userUnit = options.userUnit !== undefined ? renderUserUnit(installDir, options.userUnit) : undefined;
   const parent = plan.parentWalk.recipe;
   const hasSidecars = (parent.services ?? []).length > 0;
 
@@ -547,6 +562,17 @@ async function materializeHost(
   }
 
   const existingLockOnDisk = existingLock;
+  // Preserve the operator hint separately from clone reuse invalidation.
+  const previousUserUnit = existingLock?.launch.kind === 'script' ? existingLock.launch.userUnit : undefined;
+  if (previousUserUnit && (options.userUnit === undefined || !engines)) {
+    log.warn('previously exported user unit may still be installed and launches this run.sh; '
+      + (engines
+        ? 'no --user-unit supplied: export is not refreshed; review installed copies'
+        : 'selected engines are being removed: installed copies may fail or use unvalidated PATH engines; review or disable them'));
+  }
+  const userUnitHint = userUnit !== undefined ? join(installDir, options.userUnit!)
+    : engines ? previousUserUnit : undefined;
+
   const engineBindingChanged = JSON.stringify(existingLock?.engines) !== JSON.stringify(engines);
   // Mark the disk lock incomplete before destructive work if ANY clone
   // cannot be reused. Otherwise an interrupted ref/build/engine change could leave an
@@ -817,6 +843,13 @@ async function materializeHost(
       { mode: 0o755 },
     );
 
+    if (userUnit !== undefined) {
+      const unitPath = join(installDir, options.userUnit!);
+      writeFileSync(unitPath, userUnit, { mode: 0o600 });
+      // writeFileSync's mode applies only to new files, not reconciled exports.
+      chmodSync(unitPath, 0o600);
+    }
+
     const lock: Lockfile = {
       version: 1,
       backend: 'host',
@@ -841,7 +874,7 @@ async function materializeHost(
         origin: r.origin,
         ...(r.value !== undefined ? { value: r.value } : {}),
       })),
-      launch: { kind: 'script', script: join(installDir, 'run.sh') },
+      launch: { kind: 'script', script: join(installDir, 'run.sh'), ...(userUnitHint !== undefined ? { userUnit: userUnitHint } : {}) },
     };
     writeLockfile(installDir, lock);
   } catch (err) {

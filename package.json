@@ -17,7 +17,8 @@
     "bin",
     "dist",
     "README.md",
-    "docs/host-engines.md"
+    "docs/host-engines.md",
+    "docs/host-user-unit.md"
   ],
   "license": "Apache-2.0",
   "engines": {

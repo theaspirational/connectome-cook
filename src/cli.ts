@@ -22,6 +22,7 @@ import {
   runHostBackend,
 } from './backends/host.js';
 import { knownSecretEnvironmentNames } from './process-env.js';
+import { renderUserUnit, validateUserUnit } from './host-unit.js';
 import { pinSources, resolveRemoteRef } from './pin-refs.js';
 import { listTemplates, scaffoldRecipe, type TemplateName } from './init.js';
 
@@ -181,14 +182,16 @@ ${log.bold('Flags:')}
   --ch-repo <url>        connectome-host repo (default: ${DEFAULT_CH_REPO_URL})
   --ch-ref <ref>         connectome-host ref (default: ${DEFAULT_CH_REF})
   --bun-path <absolute>  Validate host engines (requires --node-path)
-  --node-path <absolute> Node for host builds and command: node servers
+  --node-path <absolute> Node for host builds and runtime PATH consumers
+  --user-unit <name.service>
+                         Export a user unit only (requires selected engines)
   --help, -h             Show this message
 `;
 
 async function handleInstall(argv: string[]): Promise<number> {
   const flags = mri(argv, {
     boolean: ['help', 'strict', 'yes', 'pin-refs', 'allow-incomplete-templates'],
-    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path'],
+    string: ['out', 'env-file', 'ch-repo', 'ch-ref', 'bun-path', 'node-path', 'user-unit'],
     alias: { h: 'help' },
   });
 
@@ -202,6 +205,17 @@ async function handleInstall(argv: string[]): Promise<number> {
     log.error('install: missing recipe path');
     process.stderr.write(`\n${INSTALL_USAGE}`);
     return 1;
+  }
+
+  // Refuse unit options before recipe resolution can fetch or prompt.
+  if (flags['user-unit'] !== undefined) {
+    validateUserUnit(flags['user-unit']);
+    if (!flags['bun-path'] || !flags['node-path']) {
+      throw new Error('E_HOST_UNIT: --user-unit requires both --bun-path and --node-path');
+    }
+    // Explicit output paths are known before recipe resolution can prompt.
+    // The default is slug-derived and is validated by the host backend.
+    if (flags.out !== undefined) renderUserUnit(resolve(flags.out), flags['user-unit']);
   }
 
   const planResult = await resolvePlan(recipePath, {
@@ -243,6 +257,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   );
   const result = await runHostBackend(planResult.plan, {
     installDir,
+    userUnit: flags['user-unit'],
     bunPath: flags['bun-path'],
     nodePath: flags['node-path'],
     noPrompts: flags.prompts === false,

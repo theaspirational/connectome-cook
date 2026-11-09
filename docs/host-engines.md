@@ -7,7 +7,7 @@ Host installs can opt into engine preflight:
       --ch-ref FULL_HOST_COMMIT
 
 Both paths must be absolute executable files. The install path must not contain
-`:` because it is prepended to the colon-separated build PATH. Cook temporarily
+`:` because it is prepended to the colon-separated build and runtime PATH. Cook temporarily
 fetches the selected host source, reads its package.json engines.bun and engines.node, and
 checks each executable's --version against those semver ranges, with
 `includePrerelease: true` (npm engines parity). Missing or invalid requirements,
@@ -44,12 +44,16 @@ A range failure or a version differing from preflight refuses the install; the
 lock records the versions and canonical paths observed in that directory. Build PATH prepends only the
 cook-owned `.cook-engines/bin` directory containing bun/node symlinks, not the
 engines' entire directories; unrelated executables keep their precedence.
+With selected engines, run.sh likewise prepends that private bin directory to
+the runtime PATH, after sourcing .env, so npx and env-based node/bun shebangs
+use the selected engines unless a server declares its own PATH. This is why
+--node-path covers both host builds and runtime PATH consumers.
 Empty inherited PATH segments are removed for selected-engine builds. The
 reserved `.cook-engines` directory is refreshed after confirmation and removed
 when returning to legacy engines. Clone, copy and template targets at or below `.cook-engines` are refused
 before confirmation. Git acquisition retains the operator's PATH, but removes
 repository-local Git environment variables from acquisition commands.
-Arbitrary custom commands, npx, scripts' shebangs, and connector-specific
+Arbitrary custom commands, absolute shebangs, and connector-specific
 runtime requirements are not rewritten or independently qualified. No engines
 are downloaded. Host build commands remain trusted operator-side code.
 

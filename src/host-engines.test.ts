@@ -262,9 +262,10 @@ test('colon install path is refused before preflight or writes for selected engi
   expect(() => selected.hostBuildPath('/unsafe:path/.cook-engines/bin', '/bin')).toThrow('E_HOST_ENGINE_PATH:');
 });
 
-test('engine help is scoped to builds and exact node commands; repo/ref stay adjacent', () => {
+test('engine help covers builds and runtime PATH consumers; repo/ref stay adjacent', () => {
   const help = spawnSync(process.execPath, [resolve('bin/cook'), 'install', '--help'], { encoding: 'utf8' }).stdout;
-  expect(help).toContain('Node for host builds and command: node servers');
+  expect(help).toContain('Node for host builds and runtime PATH consumers');
+  expect(help).toMatch(/--user-unit <name.service>\n +Export a user unit/);
   expect(help).toMatch(/--ch-repo[^\n]*\n  --ch-ref/);
 });
 
