@@ -517,7 +517,10 @@ export function validateRecipe(raw: unknown): Recipe {
   }
 
   const agent = obj.agent as Record<string, unknown>;
-  if (typeof agent.systemPrompt !== 'string' || !agent.systemPrompt) {
+  // Host parity: absent/null normalizes to '', '' is accepted.
+  if (agent.systemPrompt === undefined || agent.systemPrompt === null) {
+    agent.systemPrompt = '';
+  } else if (typeof agent.systemPrompt !== 'string') {
     throw new Error('Recipe agent must have a "systemPrompt" string');
   }
 
