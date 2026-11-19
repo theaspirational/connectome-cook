@@ -61,3 +61,37 @@ export function sourceLocation(source: McpSource): string {
   const section = source.role === 'extension' ? 'extensions' : 'mcpServers';
   return `${ref.recipePath} :: ${section}.${ref.mcpServerName}.source`;
 }
+
+/**
+ * Upload-pack command for an absolute local source path, else undefined.
+ *
+ * A local source may be owned by another user (e.g. a root-owned checkout
+ * under /srv). Git's upload-pack then refuses it as "dubious ownership"
+ * unless safe.directory covers it. Grant exactly this repository, never '*':
+ * `<path>` for a bare repository and `<path>/.git` for a non-bare one (the
+ * gitdir upload-pack actually checks). Other URLs (https, ssh, scp, file://)
+ * are left to Git unchanged. Git runs the command through /bin/sh, so the
+ * path is refused when it contains anything that is not plainly literal
+ * inside single quotes or that safe.directory would interpret.
+ */
+export function localSourceUploadPack(url: string, location = 'Source URL'): string | undefined {
+  return localSourceGit(url, location).uploadPack;
+}
+
+/**
+ * The URL to hand Git plus the upload-pack command (see localSourceUploadPack).
+ * Absolute local paths are normalized once by stripping trailing slashes:
+ * Git checks ownership of `<url>/.git` and compares safe.directory literally,
+ * so `/srv/host/` would check `/srv/host//.git` and match no exact entry.
+ * No realpath: a symlinked spelling is the operator's choice and Git checks
+ * it as given. Every other URL is returned unchanged.
+ */
+export function localSourceGit(url: string, location = 'Source URL'): { url: string; uploadPack?: string } {
+  if (!url.startsWith('/') || url.startsWith('//')) return { url };
+  // Never echo the rejected path.
+  if (/[\s'"`\\%*\x00-\x1f\x7f]/u.test(url)) {
+    throw new Error(`E_LOCAL_SOURCE_PATH: ${location}: local source paths must not contain whitespace, quotes, backslash, '%', '*' or control characters.`);
+  }
+  const path = url.replace(/\/+$/, '') || '/';
+  return { url: path, uploadPack: `git -c 'safe.directory=${path}' -c 'safe.directory=${path}/.git' upload-pack` };
+}

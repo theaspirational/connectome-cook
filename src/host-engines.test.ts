@@ -135,7 +135,7 @@ test('R1 role lookup: engine binding ignores clone array order', async () => {
   ], copies: [], skipped: [], localExtensionPaths: new Map<string, string>(), external: [] };
   host.bindHostEngine(actions, bun);
   expect(actions.clones[0]!.buildCommand).toBe('make');
-  expect(actions.clones[1]!.buildCommand).toBe(`'${bun}' install`);
+  expect(actions.clones[1]!.buildCommand).toBe(`'${bun}' install --ignore-scripts`);
 });
 
 test('R1 pinned acquisition: --pin-refs does not look up the host twice', () => {

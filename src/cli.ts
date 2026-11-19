@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { assertCredentialFreeSourceUrl } from './source-url.js';
+import { assertCredentialFreeSourceUrl, localSourceUploadPack } from './source-url.js';
 import { log } from './log.js';
 import { slugify } from './slug.js';
 import type { SubcommandHandler } from './types.js';
@@ -254,6 +254,7 @@ async function handleInstall(argv: string[]): Promise<number> {
   const chRepoUrl = flags['ch-repo'] ?? DEFAULT_CH_REPO_URL;
   const chRef = flags['ch-ref'] ?? DEFAULT_CH_REF;
   assertCredentialFreeSourceUrl(chRepoUrl, '--ch-repo');
+  localSourceUploadPack(chRepoUrl, '--ch-repo');
 
   // --pin-refs: resolve every symbolic ref (components + connectome-host)
   // to a SHA before executing; clones check out the exact commits.

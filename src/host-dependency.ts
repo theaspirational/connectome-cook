@@ -8,7 +8,7 @@ import { provisionPrivateDirectory, resolvePrivateDirectoryPath } from './privat
 import { log } from './log.js';
 import { PinnedCommands } from './pinned-commands.js';
 import { gitEnvironment } from './process-env.js';
-import { assertCredentialFreeSourceUrl } from './source-url.js';
+import { assertCredentialFreeSourceUrl, localSourceUploadPack } from './source-url.js';
 
 const MAX_ARCHIVE = 64 * 1024 * 1024, MAX_TAR = 128 * 1024 * 1024, MAX_JSON = 1024 * 1024, MAX_ENTRIES = 10000;
 type Section = 'dependencies' | 'devDependencies' | 'optionalDependencies';
@@ -225,6 +225,7 @@ function snapshot(source: string, dest: string, onCreated?: () => void): Buffer 
 export async function preflightHostDependencies(url: string, ref: string, inputs: HostDependencyInput[], installDir: string, onStaged?: (cleanup: () => void) => void, commands = new PinnedCommands(), gitEnv = gitEnvironment()): Promise<{ installDir: string; commit: string; checkout: string; records: LockedHostDependency[]; materialize: () => void; cleanup: () => void; discardNew: () => void }> {
   const { satisfies, valid, validRange } = await import('semver');
   assertCredentialFreeSourceUrl(url);
+  const uploadPack = localSourceUploadPack(url, '--ch-repo');
   if (/^[0-9a-f]{4,39}$/i.test(ref)) refuse('E_HOST_DEPENDENCY_SOURCE',
     `'${ref}' looks like an abbreviated commit ID; --host-dependency needs the full 40-hex ID (git rev-parse ${ref}); no output written`, true);
   try { installDir = resolvePrivateDirectoryPath(installDir); }
@@ -254,6 +255,7 @@ export async function preflightHostDependencies(url: string, ref: string, inputs
       // Git interprets local relative remotes against -C; clone uses process cwd.
       const remote = /^(?:[a-z][a-z0-9+.-]*:|[^/]+:)/i.test(url) ? url : resolve(url);
       await git([...base, 'remote', 'add', 'origin', remote]);
+      if (uploadPack) await git([...base, 'config', 'remote.origin.uploadpack', uploadPack]);
       operation = 'fetch';
       log.step(`fetching host ${log.dim(url)}@${ref} (full history and tags)`);
       await git([...base, 'fetch', '--tags', '--', 'origin', ref]);

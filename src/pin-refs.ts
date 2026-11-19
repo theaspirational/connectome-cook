@@ -12,7 +12,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { sourceGitEnvironment } from './process-env.js';
-import { assertCredentialFreeSourceUrl, sourceLocation } from './source-url.js';
+import { assertCredentialFreeSourceUrl, localSourceGit, sourceLocation } from './source-url.js';
 import { log } from './log.js';
 import type { McpSource } from './types.js';
 
@@ -36,10 +36,11 @@ export function resolveRemoteRef(
   authSecret?: string, values?: NodeJS.ProcessEnv, excluded?: Iterable<string>,
 ): string | null {
   assertCredentialFreeSourceUrl(url, location);
+  const { url: gitUrl, uploadPack } = localSourceGit(url, location);
   if (looksLikeSha(ref)) return ref.toLowerCase();
   const env = sourceGitEnvironment(url, authSecret, values, location, undefined, excluded);
   for (const candidate of candidateRefNames(ref)) {
-    const args = [...(sslBypass ? ['-c', 'http.sslVerify=false'] : []), 'ls-remote', url, candidate];
+    const args = [...(sslBypass ? ['-c', 'http.sslVerify=false'] : []), 'ls-remote', ...(uploadPack ? [`--upload-pack=${uploadPack}`] : []), gitUrl, candidate];
     let output: string;
     try {
       output = execFileSync('git', args, {

@@ -37,7 +37,7 @@ import { chmodSync, cpSync, existsSync, lstatSync, readFileSync, mkdirSync, real
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import promptsLib from 'prompts';
 import { knownSecretEnvironmentNames, sourceGitEnvironment, processAllowlistEnv } from '../process-env.js';
-import { assertCredentialFreeSourceUrl, sourceLocation } from '../source-url.js';
+import { assertCredentialFreeSourceUrl, localSourceGit, localSourceUploadPack, sourceLocation } from '../source-url.js';
 import { log } from '../log.js';
 import { shellQuote } from '../env-encoding.js';
 import type { ExternalServer, GeneratorInput, McpSource } from '../types.js';
@@ -174,6 +174,10 @@ export function hostBuildCommand(source: McpSource): string {
   }
 }
 
+/** Every Bun install cook runs: lifecycle scripts (root preinstall/install/
+ *  postinstall/prepare and trusted dependencies') never run. */
+export const BUN_INSTALL_ARGS = ['install', '--ignore-scripts'] as const;
+
 /** Compute every action the host install would take. Pure. */
 export function planHostActions(plan: InstallPlan, options: HostBackendOptions): HostActions {
   const clones: CloneAction[] = [];
@@ -186,7 +190,7 @@ export function planHostActions(plan: InstallPlan, options: HostBackendOptions):
     url: options.chRepoUrl,
     ref: options.chRef,
     target: join(options.installDir, 'app'),
-    buildCommand: 'bun install',
+    buildCommand: 'bun ' + BUN_INSTALL_ARGS.join(' '),
     ...(options.chCommit !== undefined ? { commit: options.chCommit } : {}),
   });
 
@@ -237,7 +241,7 @@ export function planHostActions(plan: InstallPlan, options: HostBackendOptions):
 export function bindHostEngine(actions: HostActions, bunPath: string): void {
   const host = actions.clones.find(action => action.role === 'connectome-host');
   if (!host) throw new Error('E_HOST_ENGINE_PLAN: connectome-host clone is missing');
-  host.buildCommand = shellQuote(bunPath) + ' install';
+  host.buildCommand = [shellQuote(bunPath), ...BUN_INSTALL_ARGS].join(' ');
 }
 
 /** Render the confirm-gate preview. Pure (string). */
@@ -334,20 +338,35 @@ async function executeClone(action: CloneAction, values: Record<string, string>,
     }
   };
   const sslArgs = action.sslBypass ? ['-c', 'http.sslVerify=false'] : [];
+  // Absolute local (possibly other-user-owned) source: exact-path safe.directory
+  // upload-pack for the clone, recorded on origin for every later fetch.
+  const { url: gitUrl, uploadPack } = localSourceGit(action.url, action.key);
+  // --no-local transfers only branches, tags and HEAD, so a commit reachable
+  // only through another ref (refs/keep/*, a force-pushed-away lock commit)
+  // is absent. Fail closed, but say how to get it.
+  const localCheckoutError = (err: unknown) => uploadPack
+    ? new Error(`${(err as Error).message} A local path source is cloned with --no-local, which copies only its branches and tags; a commit reachable only through another ref is not fetched. Set the ref to that ref by name (refs/...), or to a branch or tag containing the commit.`)
+    : err;
+  const pinOriginUploadPack = async () => {
+    if (uploadPack) await git(['config', 'remote.origin.uploadpack', uploadPack], action.target);
+  };
   log.step(`${sourceDir ? 'materializing inspected host from local scratch for' : 'cloning'} ${log.dim(action.url)}${action.ref !== 'main' ? `@${action.ref}` : ''} → ${log.dim(action.target)}`);
   if (preparedCheckout) {
     log.step(`using preflight checkout → ${log.dim(action.target)}`);
     cpSync(preparedCheckout, action.target, { recursive: true });
     await git(['checkout', '--detach', action.commit!], action.target);
+    await pinOriginUploadPack();
   } else if (sourceDir) {
     const localGit = (args: string[], step: string) => {
       try { execFileSync('git', args, { env, stdio: ['ignore', 'pipe', 'pipe'] }); }
       catch { throw new Error(`E_HOST_ENGINE_CLONE: git ${step} failed`); }
     };
     localGit(['clone', '--origin', 'origin', '--no-reject-shallow', '--no-hardlinks', '--branch', 'cook-selected', '--', sourceDir, action.target], 'clone inspected source');
-    localGit(['-C', action.target, 'remote', 'set-url', 'origin', action.url], 'set-url origin');
+    localGit(['-C', action.target, 'remote', 'set-url', 'origin', gitUrl], 'set-url origin');
+    await pinOriginUploadPack();
   } else {
-    await git([...sslArgs, 'clone', action.url, action.target]);
+    await git([...sslArgs, 'clone', ...(uploadPack ? ['--no-local', '-u', uploadPack] : []), gitUrl, action.target]);
+    await pinOriginUploadPack();
   }
   if (!preparedCheckout && action.commit) {
     // Pinned build: check out the exact SHA the operator resolved at cook
@@ -361,14 +380,15 @@ async function executeClone(action: CloneAction, values: Record<string, string>,
       await git(['checkout', action.commit], action.target);
     } catch (err) {
       if (sourceDir) throw new Error('E_HOST_ENGINE_CHECKOUT: git checkout inspected commit failed');
-      throw err;
+      throw localCheckoutError(err);
     }
   } else if (!preparedCheckout && action.ref && action.ref !== 'main') {
     if (action.ref.startsWith('refs/')) {
       await git(['fetch', 'origin', `${action.ref}:cook-install-checkout`], action.target);
       await git(['checkout', 'cook-install-checkout'], action.target);
     } else {
-      await git(['checkout', action.ref], action.target);
+      try { await git(['checkout', action.ref], action.target); }
+      catch (err) { throw localCheckoutError(err); }
     }
   }
   if (sourceDir && !preparedCheckout) {
@@ -388,7 +408,7 @@ async function executeClone(action: CloneAction, values: Record<string, string>,
   if (action.buildCommand) {
     log.step(`building ${log.dim(action.target)}: ${action.buildCommand}`);
     // Keep Bun the direct child for PID-only pinned-install cancellation.
-    if (commands && action.role === 'connectome-host') await commands.run(bunPath ?? 'bun', ['install'], action.target, true, buildEnv);
+    if (commands && action.role === 'connectome-host') await commands.run(bunPath ?? 'bun', [...BUN_INSTALL_ARGS], action.target, true, buildEnv);
     else if (commands) await commands.run('/bin/sh', ['-c', action.buildCommand], action.target, true, buildEnv);
     else execSync(action.buildCommand, {
       cwd: action.target,
@@ -625,8 +645,10 @@ async function runHostWithEngines(
   assertRecordedLayout(options.installDir, layout);
   // Preflight every source before previewing URLs or making any changes.
   assertCredentialFreeSourceUrl(options.chRepoUrl, '--ch-repo');
+  localSourceUploadPack(options.chRepoUrl, '--ch-repo');
   for (const source of plan.sources) {
     assertCredentialFreeSourceUrl(source.url, `${sourceLocation(source)}.url`);
+    localSourceUploadPack(source.url, `${sourceLocation(source)}.url`);
     sourceGitEnvironment(source.url, source.authSecret, plan.values, sourceLocation(source), undefined, excluded);
   }
   if (options.userUnit !== undefined) {

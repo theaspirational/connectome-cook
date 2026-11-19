@@ -108,7 +108,7 @@ describe('planHostActions', () => {
     const actions = planHostActions(plan, OPTIONS);
     expect(actions.clones[0]!.role).toBe('connectome-host');
     expect(actions.clones[0]!.target).toBe(join(OPTIONS.installDir, 'app'));
-    expect(actions.clones[0]!.buildCommand).toBe('bun install');
+    expect(actions.clones[0]!.buildCommand).toBe('bun install --ignore-scripts');
     expect(actions.clones[1]!.target).toBe(join(OPTIONS.installDir, 'zulip_mcp'));
   });
 

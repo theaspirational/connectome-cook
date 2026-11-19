@@ -9,6 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import * as fs from 'node:fs';
 import { archivePackage, preflightHostDependencies, parseHostDependencies, verifyHostDependencyResolutions } from './host-dependency.js';
+import { expectedUploadPack, readArgv, writeForeignGit } from './test-support/foreign-git.js';
 
 let dir: string, repo: string, out: string, recipe: string, archive: string, digest: string, shim: string;
 const realBun = process.execPath;
@@ -64,6 +65,16 @@ beforeEach(() => {
 afterEach(() => {
   for (const path of snapshots) rmSync(path, { recursive: true, force: true });
   rmSync(dir, { recursive: true, force: true });
+});
+test('foreign-owned local host: the dependency fetch and the copied checkout use the exact-path upload-pack', () => {
+  const argvLog = join(dir, 'git-argv.log'), foreign = join(dir, 'foreign');
+  writeForeignGit(shim, foreign, argvLog); writeFileSync(foreign, repo + '\n');
+  const r = install(); if (r.status) console.error(r.stdout, r.stderr);
+  expect(r.status).toBe(0);
+  const argv = readArgv(argvLog);
+  expect(argv.some(a => a.includes('config') && a.at(-2) === 'remote.origin.uploadpack' && a.at(-1) === expectedUploadPack(repo))).toBe(true);
+  expect(argv.some(a => a.includes('fetch') && a.includes('origin'))).toBe(true);
+  expect(execFileSync('git', ['config', '--get', 'remote.origin.uploadpack'], { cwd: join(out, 'app'), encoding: 'utf8' }).trim()).toBe(expectedUploadPack(repo));
 });
 test('CLI installs the artifact version offline, previews and records direct/override deltas and pinned commit', () => {
   const commit = git(['rev-parse', 'HEAD']);

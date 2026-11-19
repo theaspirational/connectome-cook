@@ -101,6 +101,31 @@ supply them through requirements**, not literal defaults or template/environment
 strings. `recipe.sha256` and `build.id` are computed from the recipe bytes as
 written (including any literal secret), not a redacted recipe.
 
+### Host install scripts and local sources
+
+Every `bun install` the host backend runs (the connectome-host checkout) passes
+`--ignore-scripts`: no root `preinstall`/`install`/`postinstall`/`prepare` and no
+trusted-dependency lifecycle scripts run. The preview shows the exact command.
+Recipe-declared component installs (npm/pip/custom) are unchanged, and the
+docker backend's generated `RUN bun install --frozen-lockfile` and
+`RUN cd <extension> && bun install` lines still run lifecycle scripts.
+
+A source URL that is an absolute local path (including `--ch-repo`) may be
+owned by another user, e.g. root. Cook clones it with
+`--no-local -u "git -c 'safe.directory=<path>' -c 'safe.directory=<path>/.git' upload-pack"`,
+records the same command as `remote.origin.uploadpack` for later fetches, and
+passes it to `ls-remote`/preflight fetches. Only that exact path (bare, or its
+`.git` gitdir) is trusted — never `*`; https/ssh/scp URLs are unchanged. Such
+paths must not contain whitespace, quotes, backslash, `%`, `*` or control
+characters (`E_LOCAL_SOURCE_PATH`). Trailing slashes are stripped from the
+path before Git sees it (no realpath; a symlinked path is used as given). A
+`url.file://<path>.insteadOf <path>` rewrite keeps working.
+
+Known limit: `--no-local` copies only the source's branches, tags and HEAD. A
+commit reachable only through another ref (e.g. `refs/keep/x`) can't be checked
+out by SHA; the install fails closed and says so. Pass that ref by name
+(`--ch-ref refs/keep/x`, or `ref: refs/keep/x`), or use a branch or tag.
+
 ### Host build environment and source credentials
 
 Git pin resolution and host materialization share filtered process settings
